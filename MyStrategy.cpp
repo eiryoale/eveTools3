@@ -1,5 +1,5 @@
 #include "MyStrategy.h"
-
+#include <functional>
 #define PI 3.14159265358979323846
 #define _USE_MATH_DEFINES
 
@@ -7,6 +7,9 @@
 #include <cstdlib>
 #include <queue>
 #include <iostream>
+#include <set>
+#include <map>
+#include <stack>
 
 using namespace model;
 using namespace std;
@@ -27,6 +30,90 @@ double maxMSX(const Wizard& w) {
 
 double maxMSY(const Wizard& w) {
 	return 4.0;// !!!!!!!!!!!!!!!!!!! НУЖНО УЧИТЫВАТЬ БАФФЫ на скорость
+}
+
+bool checkCollision(const point& a, const point& b, const CircularUnit& c) {
+	if (a.getDistanceTo(c) < c.getRadius()) return true;
+	if (b.getDistanceTo(c) < c.getRadius()) return true;
+
+	double abx = b.getX() - a.getX();
+	double aby = b.getY() - a.getY();
+
+	double bcx = c.getX() - b.getX();
+	double bcy = c.getY() - b.getY();
+
+	if ((abx * bcx + aby * bcy) > 0) return false;
+
+	double acx = c.getX() - a.getX();
+	double acy = c.getY() - a.getY();
+
+	if ((abx * acx + aby * acy) < 0) return false;
+
+	double d = sqrt(abx * abx + aby * aby);
+	double A = -aby / d;
+	double B = abx / d;
+	double C = -(A * a.getX() + B * a.getY());
+
+	if (A * c.getX() + B * c.getY() + C < c.getRadius()) return true;
+	return false;
+}
+
+template <class c1, class c2> class default_map : map<c1, c2> {
+	c2 default_value;
+
+public:
+	default_map(const c2& val) : default_map(val) { }
+
+	c2& operator[](const c1& key) {
+		if (this->find(key) == this->end()) return default_value;
+		return this->operator[](key);
+	}
+};
+
+auto findPath(const point& start, const point& dest) {
+	auto h = [](const point&a, const point&b) -> double {return a.getDistanceTo(b); };
+
+	stack<point> path;
+
+	double step = 10.0;
+	set<pair<int, int> > closed;
+	
+	typedef pair<int, int> pt;
+	typedef pair<double, pt > qtype;
+
+	priority_queue < qtype, vector<qtype>, std::greater<qtype> > open;
+	map<pt, pt> cameFrom;
+	
+	default_map<pt, double> gscore(1e100), fscore(1e100);
+
+	pt pstart(0, 0), goal((int) floor(dest.getX() - start.getX()), (int) floor(dest.getY() - start.getY())); // !!!!!!!!!!! goal может быть недостижима. Надо как минимум осматривать несколько соседних точек.
+	
+	gscore[pstart] = 0.0;
+	fscore[pstart] = h(start, dest);
+
+	open.push(qtype(h(start, dest), pt(0, 0)));
+
+	bool good = false;
+	qtype cur;
+	while (!open.empty()) {
+		cur = open.top();
+		if (cur.second == goal) {
+			good = true;
+			break;
+		}
+		
+	}
+
+	if (!good) return path;
+	pt p_cur = cur.second;
+	double x = start.getX();
+	double y = start.getX();
+	path.push(dest);
+	while (p_cur != pstart) {
+		path.push(point(x + p_cur.first * step, y + p_cur.second * step));
+		p_cur = cameFrom[p_cur];
+	}
+	return path;
 }
 
 queue <Unit> curWay;
