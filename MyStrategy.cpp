@@ -3,6 +3,7 @@
 #define PI 3.14159265358979323846
 #define _USE_MATH_DEFINES
 
+#include <ctime>
 #include <cmath>
 #include <algorithm>
 #include <cstdlib>
@@ -17,6 +18,20 @@
 
 using namespace model;
 using namespace std;
+
+template <class c> void fast_remove(vector<c>& v, const c& op) {
+	auto it = &v[0];
+	auto it_end = it + v.size();
+	bool removed = false;
+	while (it != it_end) {
+		if (*it == op) {
+			*it = v.back();
+			v.pop_back();
+			break;
+		}
+		it++;
+	}
+}
 
 template <class T> inline double sqr(T x) {
 	return x * x;
@@ -35,10 +50,14 @@ struct circle {
 
 	circle() { }
 
-	circle(const CircularUnit& u) : radius(u.getRadius()), x(u.getX()), y(u.getY()), id(u.getId()) { }
+	circle(const CircularUnit& u, double additionalRadius = 35) : radius(u.getRadius() + additionalRadius), x(u.getX()), y(u.getY()), id(u.getId()) { }
 
 	bool operator<(const circle& c) const {
 		return id < c.id;
+	}
+
+	bool operator==(const circle& c) const {
+		return id == c.id;
 	}
 };
 
@@ -118,9 +137,9 @@ auto findPath(const point& start, const point& dest) {
 
 	auto h = [](const pt&a, const pt&b) -> double {return sqrt((double) (sqr(a.first - b.first) + sqr(a.second - b.second))); };
 
-	stack<point> path;
+	list<point> path;
 
-	double step = 20.0;
+	double step = 4.0;
 	
 	unordered_set<pt> closed, openSet;
 	priority_queue < qtype, vector<qtype>, std::greater<qtype> > open;
@@ -157,6 +176,33 @@ auto findPath(const point& start, const point& dest) {
 				
 				auto neib = pt(cur.second.first + i, cur.second.second + j);
 
+				double nx = step * neib.first + start.getX();
+				double ny = step * neib.second + start.getY();
+
+				int cellx = (int) floor(nx / staticMapWidth);
+				int celly = (int) floor(ny / staticMapHeight);
+				if (cellx < 0) {
+					closed.insert(neib);
+					continue;
+				}
+				if (celly < 0) {
+					closed.insert(neib);
+					continue;
+				}
+
+				bool inObstalce = false;
+				for (auto &c : staticMap[cellx][celly]) {
+					if (sqr(c.radius) > sqr(c.x - nx) + sqr(c.y - ny)) {
+						inObstalce = true;
+						break;
+					}
+				}
+
+				if (inObstalce) {
+					closed.insert(neib);
+					continue;
+				}
+
 				if (closed.find(neib) == closed.end()) {
 					auto tScore = gscore[cur.second] + sqrt((double) (abs(i) + abs(j)));
 					if (gscore.find(neib) != gscore.end()) {
@@ -175,15 +221,16 @@ auto findPath(const point& start, const point& dest) {
 	pt p_cur = cur.second;
 	double x = start.getX();
 	double y = start.getY();
-	path.push(dest);
+	path.clear();
+	path.push_front(dest);
 	while (p_cur != pstart) {
-		path.push(point(x + p_cur.first * step, y + p_cur.second * step));
+		path.push_front(point(x + p_cur.first * step, y + p_cur.second * step));
 		p_cur = cameFrom[p_cur];
 	}
 	return path;
 }
 
-stack <point> curWay;
+list <point> curWay;
 double posX = 0, posY = 0;
 void setMoveToPoint(const Wizard& self, Move& move, const Unit& pt) {
 	double angle = self.getAngleTo(pt);
@@ -230,11 +277,132 @@ void setMoveToPoint(const Wizard& self, Move& move, double x, double y) {
 }
 
 
+void addObjectsToMap(vector< vector< vector< circle > > > &mp, const set<circle>& objects, double map_width, double map_height ) {
+	for (const auto& c : objects) {
+		//cout << "new obj: " << c.x << "\t" << c.y << "\t" << c.radius << endl;
+
+		bool top = false;
+		bool bot = false;
+		bool left = false;
+		bool right = false;
+
+		int i = floor(c.x / map_width);
+		int j = floor(c.y / map_height);
+
+		mp[i][j].push_back(c);
+
+		if (j > (int)floor((c.y - c.radius) / map_height)) {
+			top = true;
+			if (j > 0) mp[i][j - 1].push_back(c);
+		}
+
+		if (j < (int)floor((c.y + c.radius) / map_height)) {
+			bot = true;
+			mp[i][j + 1].push_back(c);
+		}
+
+		if (i >(int)floor((c.x - c.radius) / map_width)) {
+			left = true;
+			if (i > 0) mp[i - 1][j].push_back(c);
+		}
+
+		if (i < (int)floor((c.x + c.radius) / map_width)) {
+			right = true;
+			mp[i + 1][j].push_back(c);
+		}
+
+		if (top && left) {
+			double x = i * map_width;
+			double y = j * map_height;
+			if (i > 0) if (j > 0) if (sqr(x - c.x) + sqr(y - c.y) < c.radius) mp[i - 1][j - 1].push_back(c);
+		}
+
+		if (top && right) {
+			double x = (i + 1) * map_width;
+			double y = j * map_height;
+			if (j > 0) if (sqr(x - c.x) + sqr(y - c.y) < c.radius) mp[i + 1][j - 1].push_back(c);
+		}
+
+		if (bot && left) {
+			double x = i * map_width;
+			double y = (j + 1) * map_height;
+			if (i > 0) if (sqr(x - c.x) + sqr(y - c.y) < c.radius) mp[i - 1][j + 1].push_back(c);
+		}
+
+		if (bot && right) {
+			double x = (i + 1) * map_width;
+			double y = (j + 1) * map_height;
+			if (sqr(x - c.x) + sqr(y - c.y) < c.radius) mp[i + 1][j + 1].push_back(c);
+		}
+
+	}
+}
+
+void removeObjectsFromMap(vector< vector< vector< circle > > > &mp, const set<circle>& objects, double map_width, double map_height) {
+	for (const auto& c : objects) {
+		//cout << "new obj: " << c.x << "\t" << c.y << "\t" << c.radius << endl;
+
+		bool top = false;
+		bool bot = false;
+		bool left = false;
+		bool right = false;
+
+		int i = floor(c.x / map_width);
+		int j = floor(c.y / map_height);
+
+		fast_remove(mp[i][j], c);
+
+		if (j > (int)floor((c.y - c.radius) / map_height)) {
+			top = true;
+			if (j > 0) fast_remove(mp[i][j - 1], c);
+		}
+
+		if (j < (int)floor((c.y + c.radius) / map_height)) {
+			bot = true;
+			fast_remove(mp[i][j + 1], c);
+		}
+
+		if (i >(int)floor((c.x - c.radius) / map_width)) {
+			left = true;
+			if (i > 0) fast_remove(mp[i - 1][j], c);
+		}
+
+		if (i < (int)floor((c.x + c.radius) / map_width)) {
+			right = true;
+			fast_remove(mp[i + 1][j], c);
+		}
+
+		if (top && left) {
+			double x = i * map_width;
+			double y = j * map_height;
+			if (i > 0) if (j > 0) if (sqr(x - c.x) + sqr(y - c.y) < c.radius) fast_remove(mp[i - 1][j - 1], c);
+		}
+
+		if (top && right) {
+			double x = (i + 1) * map_width;
+			double y = j * map_height;
+			if (j > 0) if (sqr(x - c.x) + sqr(y - c.y) < c.radius) fast_remove(mp[i + 1][j - 1], c);
+		}
+
+		if (bot && left) {
+			double x = i * map_width;
+			double y = (j + 1) * map_height;
+			if (i > 0) if (sqr(x - c.x) + sqr(y - c.y) < c.radius) fast_remove(mp[i - 1][j + 1], c);
+		}
+
+		if (bot && right) {
+			double x = (i + 1) * map_width;
+			double y = (j + 1) * map_height;
+			if (sqr(x - c.x) + sqr(y - c.y) < c.radius) fast_remove(mp[i + 1][j + 1], c);
+		}
+	}
+}
+
 void MyStrategy::move(const Wizard& self, const World& world, const Game& game, Move& move) {
 	bool inBattle = false;
 	
 	// ========================================================= Prepare map ===================================================================================================================================================================
-	set<circle, circleSetComarator> staticObjects, newStaticObjects, killedStaticObjects;
+	set<circle> staticObjects, newStaticObjects, killedStaticObjects;
 
 	auto buildings = world.getBuildings();
 	for (auto& b : buildings) staticObjects.insert(b);
@@ -245,89 +413,33 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 	set_difference(staticObjects.begin(), staticObjects.end(), prevStaticObjects.begin(), prevStaticObjects.end(), inserter(newStaticObjects, newStaticObjects.end()));
 	set_difference(prevStaticObjects.begin(), prevStaticObjects.end(), staticObjects.begin(), staticObjects.end(), inserter(killedStaticObjects, killedStaticObjects.end()));
 
-	// ----------- add new objects
-	for (auto& c : newStaticObjects) {
-		//cout << "new obj: " << c.x << "\t" << c.y << "\t" << c.radius << endl;
+	addObjectsToMap(staticMap, newStaticObjects, staticMapWidth, staticMapHeight);
+	removeObjectsFromMap(staticMap, killedStaticObjects, staticMapWidth, staticMapHeight);
 
-		bool top = false;
-		bool bot = false;
-		bool left = false;
-		bool right = false;
+	/*
+	double r_2 = c.radius * c.radius;
+	double leftx = c.x - c.radius;
+	double rightx = c.x + c.radius;
+	int s = (int) floor(leftx / staticMapWidth);
+	int e = (int) floor(rightx / staticMapWidth);
 
-		int i = floor(c.x / staticMapWidth);
-		int j = floor(c.y / staticMapHeight);
+	for (int i = s; i <= e; i++) {
+	double x0 = i * staticMapWidth;
 
-		staticMap[i][j].push_back(c);
+	double ytop = c.y - sqrt(r_2 - sqr(x0 - c.x));
+	double ybot = c.y + sqrt(r_2 - sqr(x0 - c.x));
 
-		if (j > (int)floor((c.y - c.radius) / staticMapHeight)) {
-			top = true;
-			staticMap[i][j - 1].push_back(c);
-		}
+	int sy = (int)floor(ytop / staticMapHeight);
+	int ey = (int)floor(ybot / staticMapHeight);
 
-		if (j < (int)floor((c.y + c.radius) / staticMapHeight)) {
-			bot = true;
-			staticMap[i][j + 1].push_back(c);
-		}
-
-		if (i > (int)floor((c.x - c.radius) / staticMapWidth)) {
-			left = true;
-			staticMap[i - 1][j].push_back(c);
-		}
-
-		if (i < (int)floor((c.x + c.radius) / staticMapWidth)) {
-			right = true;
-			staticMap[i + 1][j].push_back(c);
-		}
-
-		if (top && left) {
-			double x = i * staticMapWidth;
-			double y = j * staticMapHeight;
-			if(sqr(x - c.x) + sqr(y - c.y) < c.radius) staticMap[i - 1][j - 1].push_back(c);
-		}
-
-		if (top && right) {
-			double x = (i + 1) * staticMapWidth;
-			double y = j * staticMapHeight;
-			if (sqr(x - c.x) + sqr(y - c.y) < c.radius) staticMap[i + 1][j - 1].push_back(c);
-		}
-
-		if (bot && left) {
-			double x = i * staticMapWidth;
-			double y = (j + 1) * staticMapHeight;
-			if (sqr(x - c.x) + sqr(y - c.y) < c.radius) staticMap[i - 1][j + 1].push_back(c);
-		}
-
-		if (bot && right) {
-			double x = (i + 1) * staticMapWidth;
-			double y = (j + 1) * staticMapHeight;
-			if (sqr(x - c.x) + sqr(y - c.y) < c.radius) staticMap[i + 1][j + 1].push_back(c);
-		}
-
-		/*
-		double r_2 = c.radius * c.radius;
-		double leftx = c.x - c.radius;
-		double rightx = c.x + c.radius;
-		int s = (int) floor(leftx / staticMapWidth);
-		int e = (int) floor(rightx / staticMapWidth);
-
-		for (int i = s; i <= e; i++) {
-			double x0 = i * staticMapWidth;
-
-			double ytop = c.y - sqrt(r_2 - sqr(x0 - c.x));
-			double ybot = c.y + sqrt(r_2 - sqr(x0 - c.x));
-
-			int sy = (int)floor(ytop / staticMapHeight);
-			int ey = (int)floor(ybot / staticMapHeight);
-
-			for (int j = sy; j <= ey; j++) {
-				staticMap[i][j].push_back(c);
-			}
-
-			//крайние точки!
-		}
-		*/
+	for (int j = sy; j <= ey; j++) {
+	staticMap[i][j].push_back(c);
 	}
-	
+
+	//крайние точки!
+	}
+	*/
+
 	// ----------- remove killed objects
 	// .............................................
 
@@ -337,15 +449,19 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 
 	// ========================================================= Movement ===================================================================================================================================================================
 	{
+		auto ts = clock();
+		curWay = findPath(point(self.getX(), self.getY()), point(1200, 1200));
+		cout << "time spent for path: " << clock() - ts << endl;
+
 		if (!curWay.empty()) {
-			if (self.getDistanceTo(curWay.top()) < 1e-2) {
-				curWay.pop();
+			if (self.getDistanceTo(curWay.front()) < 1e-2) {
+				curWay.pop_front();
 			}
 			if (!curWay.empty()) {
-				setMoveToPoint(self, move, curWay.top());
+				setMoveToPoint(self, move, curWay.front());
 
 				if (!inBattle) {
-					move.setTurn(self.getAngleTo(curWay.top()));
+					move.setTurn(self.getAngleTo(curWay.front()));
 				}
 			}
 		}
@@ -360,6 +476,4 @@ MyStrategy::MyStrategy() {
 			cell.reserve(100);
 		}
 	}
-
-	curWay = findPath(point(100, 3700), point(2000, 2000));
 }
