@@ -75,7 +75,10 @@ vector< vector< vector< circle > > > staticMap;
 
 class point : public Unit {
 public:
+	double x, y;
 	point(double a, double b) : Unit(0, a, b, 0,0,0,FACTION_ACADEMY) {
+		x = a;
+		y = b;
 	}
 };
 
@@ -85,6 +88,32 @@ double maxMSX(const Wizard& w) {
 
 double maxMSY(const Wizard& w) {
 	return 4.0;// !!!!!!!!!!!!!!!!!!! Õ”∆ÕŒ ”◊»“€¬¿“‹ ¡¿‘‘€ Ì‡ ÒÍÓÓÒÚ¸
+}
+
+bool checkCollision(const point& a, const point& b, const circle& c) {
+	if (sqr(a.x - c.x) + sqr(a.y - c.y) < sqr(c.radius)) return true;
+	if (sqr(b.x - c.x) + sqr(b.y - c.y) < sqr(c.radius)) return true;
+
+	double abx = b.x - a.x;
+	double aby = b.y - a.y;
+
+	double bcx = c.x - b.x;
+	double bcy = c.y - b.y;
+
+	if ((abx * bcx + aby * bcy) > 0) return false;
+
+	double acx = c.x - a.x;
+	double acy = c.y - a.y;
+
+	if ((abx * acx + aby * acy) < 0) return false;
+
+	double d = sqrt(abx * abx + aby * aby);
+	double A = -aby / d;
+	double B = abx / d;
+	double C = -(A * a.x + B * a.y);
+
+	if (A * c.x + B * c.y + C < c.radius) return true;
+	return false;
 }
 
 bool checkCollision(const point& a, const point& b, const CircularUnit& c) {
@@ -131,16 +160,67 @@ public:
 };
 */
 
-auto findPath(const point& start, const point& dest) {
+bool checkCollisions(double ax, double ay, double bx, double by, const vector< vector< vector<circle> > >& objects) {
+	typedef pair<int, int> pt;
+	set<pt> cells;
+	double A, B, C;
+	A = ay - by;
+	B = bx - ax;
+	C = -(A * ax + B * ay);
+	
+	double sx = floor(ax / staticMapWidth);
+	double sy = floor(ay / staticMapHeight);
+
+	int i, j;
+	i = (int)sx;
+
+	cells.insert(pt((int)sx, (int)sy));
+	sx *= staticMapWidth;
+	sy *= staticMapHeight;
+
+	double dx = staticMapWidth * (bx > ax ? 1 : -1);
+	int di = (bx > ax ? 1 : -1);
+	sx += dx;
+	i+=di;
+	while (sx * di < bx * di) {
+		static double y = -(A * sx + C) / B;
+		j = (int)floor(y / staticMapHeight);
+		cells.insert(pt(i, j));
+		cells.insert(pt(i - 1, j));
+		i += di;
+		sx += dx;
+	}
+
+	double dy = staticMapHeight * (by > ay ? 1 : -1);
+	int dj = (by > ay ? 1 : -1);
+	j = (int)sy / staticMapHeight;
+	while (sy * dj < by * dj) {
+		static double x = -(B * sy + C) / A;
+		i = (int)floor(x / staticMapHeight);
+		cells.insert(pt(i, j));
+		cells.insert(pt(i, j - 1));
+		j += dj;
+		sy += dy;
+	}
+
+	point a(ax, ay), b(bx, by);
+	for (const auto&c : cells) {
+		for (const auto& obj : objects[c.first][c.second]) {
+			if (checkCollision(a, b, obj)) return true;
+		}
+	}
+
+	return false;
+}
+
+auto findPath(const point& start, const point& dest, double step = 20.0) {
 	typedef pair<int, int> pt;
 	typedef pair<double, pt > qtype;
 
 	auto h = [](const pt&a, const pt&b) -> double {return sqrt((double) (sqr(a.first - b.first) + sqr(a.second - b.second))); };
 
 	list<point> path;
-
-	double step = 4.0;
-	
+		
 	unordered_set<pt> closed, openSet;
 	priority_queue < qtype, vector<qtype>, std::greater<qtype> > open;
 	unordered_map<pt, pt> cameFrom;
@@ -170,6 +250,8 @@ auto findPath(const point& start, const point& dest) {
 		open.pop();
 		openSet.erase(cur.second);
 		closed.insert(cur.second);
+		double curx = step * cur.second.first + start.getX();
+		double cury = step * cur.second.second + start.getY();
 		for (int i = -1; i < 2; i++) {
 			for (int j = -1; j < 2; j++) {
 				if ((0 == j) && (i == 0)) continue;
@@ -178,7 +260,7 @@ auto findPath(const point& start, const point& dest) {
 
 				double nx = step * neib.first + start.getX();
 				double ny = step * neib.second + start.getY();
-
+				
 				int cellx = (int) floor(nx / staticMapWidth);
 				int celly = (int) floor(ny / staticMapHeight);
 				if (cellx < 0) {
@@ -190,13 +272,16 @@ auto findPath(const point& start, const point& dest) {
 					continue;
 				}
 
-				bool inObstalce = false;
+				bool inObstalce = checkCollisions(curx, cury, nx,ny, staticMap);
+				/*
 				for (auto &c : staticMap[cellx][celly]) {
 					if (sqr(c.radius) > sqr(c.x - nx) + sqr(c.y - ny)) {
 						inObstalce = true;
 						break;
 					}
 				}
+				*/
+
 
 				if (inObstalce) {
 					closed.insert(neib);
@@ -450,12 +535,11 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 	// ========================================================= Movement ===================================================================================================================================================================
 	{
 		auto ts = clock();
-		curWay = findPath(point(self.getX(), self.getY()), point(1200, 1200));
-		cout << "time spent for path: " << clock() - ts << endl;
-
+		
 		if (!curWay.empty()) {
 			if (self.getDistanceTo(curWay.front()) < 1e-2) {
-				curWay.pop_front();
+				curWay = findPath(point(self.getX(), self.getY()), point(1200, 1200));
+				cout << "time spent for path: " << clock() - ts << endl;
 			}
 			if (!curWay.empty()) {
 				setMoveToPoint(self, move, curWay.front());
@@ -469,11 +553,13 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 }
 
 MyStrategy::MyStrategy() { 
-	staticMap.resize(ceil(4000.0 / staticMapHeight));
+	staticMap.resize(5 + ceil(4000.0 / staticMapHeight));
 	for (auto &row : staticMap) {
-		row.resize(ceil(4000.0 / staticMapWidth));
+		row.resize(5 + ceil(4000.0 / staticMapWidth));
 		for (auto& cell : row) {
 			cell.reserve(100);
 		}
 	}
+
+	curWay = findPath(point(100, 3700), point(1200, 1200));
 }
