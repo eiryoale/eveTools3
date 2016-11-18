@@ -67,8 +67,7 @@ struct circleSetComarator {
 	}
 };
 
-double staticMapWidth = 150.0; // не меньше, чем радиус самого большого объекта (85 при данных правилах, не счита€ базы)
-double staticMapHeight = 150.0;
+double cellSize = 150.0; // не меньше, чем радиус самого большого объекта (85 при данных правилах, не счита€ базы)
 set<circle, circleSetComarator> prevStaticObjects;
 
 vector< vector< vector< circle > > > staticMap;
@@ -138,7 +137,7 @@ bool checkCollision(const point& a, const point& b, const CircularUnit& c) {
 	double B = abx / d;
 	double C = -(A * a.getX() + B * a.getY());
 
-	if (A * c.getX() + B * c.getY() + C < c.getRadius()) return true;
+	if (A * c.getX() + B * c.getY() + C < c.getRadius() + 1e-2) return true;
 	return false;
 }
 
@@ -160,6 +159,53 @@ public:
 };
 */
 
+bool checkCollisionsShort(double ax, double ay, double bx, double by, const vector< vector< vector<circle> > >& objects) {
+	typedef pair<int, int> pt;
+	set<pt> cells;
+	
+	pt a_pt((int)floor(ax / cellSize), (int)floor(ay / cellSize));
+	pt b_pt((int)floor(bx / cellSize), (int)floor(by / cellSize));
+	cells.insert(a_pt);
+	if (a_pt != b_pt) {
+		cells.insert(b_pt);
+
+		if ((a_pt.first != b_pt.first) && (a_pt.second != b_pt.second)) {
+			double A, B, C;
+			A = ay - by;
+			B = bx - ax;
+			C = -(A * ax + B * ay);
+
+			if (a_pt > b_pt) {
+				swap(a_pt, b_pt);
+				swap(ax, bx);
+				swap(ay, by);
+			}
+			
+			double crossx = floor(bx / cellSize) * cellSize;
+			double crossy = -(C + A * crossx) / B;
+			cells.insert(pt(b_pt.first, (int)floor(crossy / cellSize)));
+		}
+	}
+
+
+	// ----------------------------------------------
+
+	set<circle> circles;
+
+	point a(ax, ay), b(bx, by);
+	for (auto&c : cells) {
+		for (auto& obj : objects[c.first][c.second]) {
+			circles.insert(obj);
+		}
+	}
+
+	for (const auto& obj : circles) {
+		if (checkCollision(a, b, obj)) return true;
+	}
+
+	return false;
+}
+
 bool checkCollisions(double ax, double ay, double bx, double by, const vector< vector< vector<circle> > >& objects) {
 	typedef pair<int, int> pt;
 	set<pt> cells;
@@ -168,35 +214,35 @@ bool checkCollisions(double ax, double ay, double bx, double by, const vector< v
 	B = bx - ax;
 	C = -(A * ax + B * ay);
 	
-	double sx = floor(ax / staticMapWidth);
-	double sy = floor(ay / staticMapHeight);
+	double sx = floor(ax / cellSize);
+	double sy = floor(ay / cellSize);
 
 	int i, j;
 	i = (int)sx;
 
 	cells.insert(pt((int)sx, (int)sy));
-	sx *= staticMapWidth;
-	sy *= staticMapHeight;
+	sx *= cellSize;
+	sy *= cellSize;
 
-	double dx = staticMapWidth * (bx > ax ? 1 : -1);
+	double dx = cellSize * (bx > ax ? 1 : -1);
 	int di = (bx > ax ? 1 : -1);
 	sx += dx;
 	i+=di;
 	while (sx * di < bx * di) {
 		static double y = -(A * sx + C) / B;
-		j = (int)floor(y / staticMapHeight);
+		j = (int)floor(y / cellSize);
 		cells.insert(pt(i, j));
 		cells.insert(pt(i - 1, j));
 		i += di;
 		sx += dx;
 	}
 
-	double dy = staticMapHeight * (by > ay ? 1 : -1);
+	double dy = cellSize * (by > ay ? 1 : -1);
 	int dj = (by > ay ? 1 : -1);
-	j = (int)sy / staticMapHeight;
+	j = (int) (sy / cellSize);
 	while (sy * dj < by * dj) {
 		static double x = -(B * sy + C) / A;
-		i = (int)floor(x / staticMapHeight);
+		i = (int)floor(x / cellSize);
 		cells.insert(pt(i, j));
 		cells.insert(pt(i, j - 1));
 		j += dj;
@@ -261,8 +307,8 @@ auto findPath(const point& start, const point& dest, double step = 20.0) {
 				double nx = step * neib.first + start.getX();
 				double ny = step * neib.second + start.getY();
 				
-				int cellx = (int) floor(nx / staticMapWidth);
-				int celly = (int) floor(ny / staticMapHeight);
+				int cellx = (int) floor(nx / cellSize);
+				int celly = (int) floor(ny / cellSize);
 				if (cellx < 0) {
 					closed.insert(neib);
 					continue;
@@ -272,7 +318,9 @@ auto findPath(const point& start, const point& dest, double step = 20.0) {
 					continue;
 				}
 
-				bool inObstalce = checkCollisions(curx, cury, nx,ny, staticMap);
+				bool inObstalce = false;
+				inObstalce = checkCollisionsShort(curx, cury, nx, ny, staticMap);
+				//inObstalce = checkCollisions(curx, cury, nx, ny, staticMap);
 				/*
 				for (auto &c : staticMap[cellx][celly]) {
 					if (sqr(c.radius) > sqr(c.x - nx) + sqr(c.y - ny)) {
@@ -319,11 +367,11 @@ list <point> curWay;
 double posX = 0, posY = 0;
 void setMoveToPoint(const Wizard& self, Move& move, const Unit& pt) {
 	double angle = self.getAngleTo(pt);
-	cout << "angle = " << angle << endl;
-	cout << "dx = " << self.getX() - posX << "\t dy = " << self.getY() - posY << endl;
+	//cout << "angle = " << angle << endl;
+	//cout << "dx = " << self.getX() - posX << "\t dy = " << self.getY() - posY << endl;
 	posX = self.getX();
 	posY = self.getY();
-	cout << self.getX() << ", " << self.getY() << endl;
+	//cout << self.getX() << ", " << self.getY() << endl;
 	
 	double maxSpeedX = maxMSX(self); // !!!!!!!!!!!!!!!!!!! Ќ”∆Ќќ ”„»“џ¬ј“№ Ѕј‘‘џ на скорость
 	double maxSpeedY = maxMSY(self); // !!!!!!!!!!!!!!!!!!! Ќ”∆Ќќ ”„»“џ¬ј“№ Ѕј‘‘џ на скорость
@@ -371,8 +419,8 @@ void addObjectsToMap(vector< vector< vector< circle > > > &mp, const set<circle>
 		bool left = false;
 		bool right = false;
 
-		int i = floor(c.x / map_width);
-		int j = floor(c.y / map_height);
+		int i = (int) floor(c.x / map_width);
+		int j = (int) floor(c.y / map_height);
 
 		mp[i][j].push_back(c);
 
@@ -432,8 +480,8 @@ void removeObjectsFromMap(vector< vector< vector< circle > > > &mp, const set<ci
 		bool left = false;
 		bool right = false;
 
-		int i = floor(c.x / map_width);
-		int j = floor(c.y / map_height);
+		int i = (int) floor(c.x / map_width);
+		int j = (int) floor(c.y / map_height);
 
 		fast_remove(mp[i][j], c);
 
@@ -498,24 +546,24 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 	set_difference(staticObjects.begin(), staticObjects.end(), prevStaticObjects.begin(), prevStaticObjects.end(), inserter(newStaticObjects, newStaticObjects.end()));
 	set_difference(prevStaticObjects.begin(), prevStaticObjects.end(), staticObjects.begin(), staticObjects.end(), inserter(killedStaticObjects, killedStaticObjects.end()));
 
-	addObjectsToMap(staticMap, newStaticObjects, staticMapWidth, staticMapHeight);
-	removeObjectsFromMap(staticMap, killedStaticObjects, staticMapWidth, staticMapHeight);
+	addObjectsToMap(staticMap, newStaticObjects, cellSize, cellSize);
+	removeObjectsFromMap(staticMap, killedStaticObjects, cellSize, cellSize);
 
 	/*
 	double r_2 = c.radius * c.radius;
 	double leftx = c.x - c.radius;
 	double rightx = c.x + c.radius;
-	int s = (int) floor(leftx / staticMapWidth);
-	int e = (int) floor(rightx / staticMapWidth);
+	int s = (int) floor(leftx / cellSize);
+	int e = (int) floor(rightx / cellSize);
 
 	for (int i = s; i <= e; i++) {
-	double x0 = i * staticMapWidth;
+	double x0 = i * cellSize;
 
 	double ytop = c.y - sqrt(r_2 - sqr(x0 - c.x));
 	double ybot = c.y + sqrt(r_2 - sqr(x0 - c.x));
 
-	int sy = (int)floor(ytop / staticMapHeight);
-	int ey = (int)floor(ybot / staticMapHeight);
+	int sy = (int)floor(ytop / cellSize);
+	int ey = (int)floor(ybot / cellSize);
 
 	for (int j = sy; j <= ey; j++) {
 	staticMap[i][j].push_back(c);
@@ -553,9 +601,9 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 }
 
 MyStrategy::MyStrategy() { 
-	staticMap.resize(5 + ceil(4000.0 / staticMapHeight));
+	staticMap.resize(5 + (int)ceil(4000.0 / cellSize));
 	for (auto &row : staticMap) {
-		row.resize(5 + ceil(4000.0 / staticMapWidth));
+		row.resize(5 + (int)ceil(4000.0 / cellSize));
 		for (auto& cell : row) {
 			cell.reserve(100);
 		}
