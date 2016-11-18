@@ -3,6 +3,7 @@
 #define PI 3.14159265358979323846
 #define _USE_MATH_DEFINES
 
+#include <chrono>
 #include <ctime>
 #include <cmath>
 #include <algorithm>
@@ -18,6 +19,10 @@
 
 using namespace model;
 using namespace std;
+
+long long time() {
+	return chrono::high_resolution_clock::now().time_since_epoch().count();
+}
 
 template <class c> void fast_remove(vector<c>& v, const c& op) {
 	auto it = &v[0];
@@ -61,6 +66,23 @@ struct circle {
 	}
 };
 
+struct dcircle : circle {
+	double sightRange = 0.0;
+
+	dcircle() { }
+
+	dcircle(const Minion& u, double additionalRadius = 35) : circle(u, additionalRadius), sightRange(u.getVisionRange()) { }
+	dcircle(const Wizard& u, double additionalRadius = 35) : circle(u, additionalRadius), sightRange(u.getVisionRange()) { }
+
+	bool operator<(const dcircle& c) const {
+		return id < c.id;
+	}
+
+	bool operator==(const dcircle& c) const {
+		return id == c.id;
+	}
+};
+
 struct circleSetComarator {
 	bool operator() (const circle & c1, const circle& c2) {
 		return c1.id < c2.id;
@@ -68,9 +90,10 @@ struct circleSetComarator {
 };
 
 double cellSize = 150.0; // не меньше, чем радиус самого большого объекта (85 при данных правилах, не считая базы)
-set<circle, circleSetComarator> prevStaticObjects;
+set<circle> prevStaticObjects;
 
 vector< vector< vector< circle > > > staticMap;
+vector< vector< vector< dcircle > > > dynamicMap;
 
 class point : public Unit {
 public:
@@ -159,7 +182,7 @@ public:
 };
 */
 
-bool checkCollisionsShort(double ax, double ay, double bx, double by, const vector< vector< vector<circle> > >& objects) {
+template <class circle_class> bool checkCollisionsShort(double ax, double ay, double bx, double by, const vector< vector< vector<circle_class> > >& objects) {
 	typedef pair<int, int> pt;
 	set<pt> cells;
 	
@@ -190,7 +213,7 @@ bool checkCollisionsShort(double ax, double ay, double bx, double by, const vect
 
 	// ----------------------------------------------
 
-	set<circle> circles;
+	set<circle_class> circles;
 
 	point a(ax, ay), b(bx, by);
 	for (auto&c : cells) {
@@ -204,6 +227,10 @@ bool checkCollisionsShort(double ax, double ay, double bx, double by, const vect
 	}
 
 	return false;
+}
+
+template<class circle_class> vector<circle_class>* cellByXY(double x, double y, vector< vector< vector<circle_class> > > &objects) {
+	return &(objects[(int)floor(x / cellSize)][(int)floor(y / cellSize)]);
 }
 
 bool checkCollisions(double ax, double ay, double bx, double by, const vector< vector< vector<circle> > >& objects) {
@@ -320,6 +347,7 @@ auto findPath(const point& start, const point& dest, double step = 20.0) {
 
 				bool inObstalce = false;
 				inObstalce = checkCollisionsShort(curx, cury, nx, ny, staticMap);
+				if(!inObstalce) inObstalce = checkCollisionsShort(curx, cury, nx, ny, dynamicMap);
 				//inObstalce = checkCollisions(curx, cury, nx, ny, staticMap);
 				/*
 				for (auto &c : staticMap[cellx][celly]) {
@@ -329,7 +357,6 @@ auto findPath(const point& start, const point& dest, double step = 20.0) {
 					}
 				}
 				*/
-
 
 				if (inObstalce) {
 					closed.insert(neib);
@@ -409,8 +436,7 @@ void setMoveToPoint(const Wizard& self, Move& move, double x, double y) {
 	setMoveToPoint(self, move, point(x,y));
 }
 
-
-void addObjectsToMap(vector< vector< vector< circle > > > &mp, const set<circle>& objects, double map_width, double map_height ) {
+template <class circle_class> void addObjectsToMap(vector< vector< vector< circle_class > > > &mp, const set<circle_class>& objects, double map_width, double map_height ) {
 	for (const auto& c : objects) {
 		//cout << "new obj: " << c.x << "\t" << c.y << "\t" << c.radius << endl;
 
@@ -531,63 +557,72 @@ void removeObjectsFromMap(vector< vector< vector< circle > > > &mp, const set<ci
 	}
 }
 
+
+
+long long cum_move_time = 0;
+int tick = 0;
 void MyStrategy::move(const Wizard& self, const World& world, const Game& game, Move& move) {
 	bool inBattle = false;
-	
+	auto move_start_time = time();
+	tick++;
 	// ========================================================= Prepare map ===================================================================================================================================================================
 	set<circle> staticObjects, newStaticObjects, killedStaticObjects;
+	set<dcircle> dynamicObjects;
+	
+	for (auto &row : dynamicMap) {
+		for (auto& cell : row) {
+			cell.resize(0);
+		}
+	}
 
 	auto buildings = world.getBuildings();
 	for (auto& b : buildings) staticObjects.insert(b);
 	auto trees = world.getTrees();
 	for (auto& t : trees) staticObjects.insert(t);
 
+	auto minions = world.getMinions();
+	for (auto & m : minions) dynamicObjects.insert(m);
+	auto players = world.getWizards();
+	for (auto & m : players) {
+		if (!m.isMe()) {
+			dynamicObjects.insert(m);
+		}
+	}
+
 	
 	set_difference(staticObjects.begin(), staticObjects.end(), prevStaticObjects.begin(), prevStaticObjects.end(), inserter(newStaticObjects, newStaticObjects.end()));
 	set_difference(prevStaticObjects.begin(), prevStaticObjects.end(), staticObjects.begin(), staticObjects.end(), inserter(killedStaticObjects, killedStaticObjects.end()));
 
+	prevStaticObjects = staticObjects;
+
 	addObjectsToMap(staticMap, newStaticObjects, cellSize, cellSize);
-	removeObjectsFromMap(staticMap, killedStaticObjects, cellSize, cellSize);
-
-	/*
-	double r_2 = c.radius * c.radius;
-	double leftx = c.x - c.radius;
-	double rightx = c.x + c.radius;
-	int s = (int) floor(leftx / cellSize);
-	int e = (int) floor(rightx / cellSize);
-
-	for (int i = s; i <= e; i++) {
-	double x0 = i * cellSize;
-
-	double ytop = c.y - sqrt(r_2 - sqr(x0 - c.x));
-	double ybot = c.y + sqrt(r_2 - sqr(x0 - c.x));
-
-	int sy = (int)floor(ytop / cellSize);
-	int ey = (int)floor(ybot / cellSize);
-
-	for (int j = sy; j <= ey; j++) {
-	staticMap[i][j].push_back(c);
-	}
-
-	//крайние точки!
-	}
-	*/
+	addObjectsToMap(dynamicMap, dynamicObjects, cellSize, cellSize);
 
 	// ----------- remove killed objects
-	// .............................................
+	set<circle> toRemove;
 
-	// ----------- deal with trees
-	// если в явной зоне видимости нет дерева, которое должно быть - убрать его из списка деревьев.
-	// .............................................
+	for (auto& c : killedStaticObjects) {
+		//!!!!!!!!!!!!!!!!!!!!!!!!!! check if any dynamic obj. or *building* should see that object
+
+	}
+	
+	removeObjectsFromMap(staticMap, toRemove, cellSize, cellSize);
 
 	// ========================================================= Movement ===================================================================================================================================================================
 	{
-		auto ts = clock();
+		
 		
 		if (!curWay.empty()) {
-			if (self.getDistanceTo(curWay.front()) < 1e-2) {
+			bool needToRecountPath = false;
+			auto dobjects = cellByXY(self.getX(), self.getY(), dynamicMap);
+			if (dobjects->size() > 0) needToRecountPath = true;
+			if (self.getDistanceTo(curWay.front()) < 1e-2) needToRecountPath = true;
+			if (needToRecountPath) {
+				auto ts = time();
+				static long long cumulative = 0;
 				curWay = findPath(point(self.getX(), self.getY()), point(1200, 1200));
-				cout << "time spent for path: " << clock() - ts << endl;
+				cumulative += time() - ts;
+				cout << "time spent for path: " << (time() - ts) / 1000000 << " \t " << cumulative / 1000000 << endl;
 			}
 			if (!curWay.empty()) {
 				setMoveToPoint(self, move, curWay.front());
@@ -598,6 +633,9 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 			}
 		}
 	}
+
+	cum_move_time += time() - move_start_time;
+	cout << "Time per tick(0.01ms): " << cum_move_time / tick / 10000 << endl;
 }
 
 MyStrategy::MyStrategy() { 
@@ -609,5 +647,13 @@ MyStrategy::MyStrategy() {
 		}
 	}
 
+	dynamicMap.resize(5 + (int)ceil(4000.0 / cellSize));
+	for (auto &row : dynamicMap) {
+		row.resize(5 + (int)ceil(4000.0 / cellSize));
+		for (auto& cell : row) {
+			cell.reserve(100);
+		}
+	}
+	
 	curWay = findPath(point(100, 3700), point(1200, 1200));
 }
