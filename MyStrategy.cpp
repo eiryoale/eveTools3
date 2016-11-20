@@ -647,6 +647,8 @@ void removeObjectsFromMap(vector< vector< vector< circle > > > &mp, const set<ci
 long long cum_move_time = 0;
 int tick = 0;
 set<int> treesSet;
+point top_lane(100, 100), mid_lane(2000, 2000), bot_lane(3900, 3900);
+
 void MyStrategy::move(const Wizard& self, const World& world, const Game& game, Move& move) {
 	bool inBattle = false;
 	auto move_start_time = time();
