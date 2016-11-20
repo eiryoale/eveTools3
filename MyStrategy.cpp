@@ -71,8 +71,8 @@ struct dcircle : circle {
 
 	dcircle() { }
 
-	dcircle(const Minion& u, double additionalRadius = 35) : circle(u, additionalRadius), sightRange(u.getVisionRange()) { }
-	dcircle(const Wizard& u, double additionalRadius = 35) : circle(u, additionalRadius), sightRange(u.getVisionRange()) { }
+	dcircle(const Minion& u, double additionalRadius = 38) : circle(u, additionalRadius), sightRange(u.getVisionRange()) { }
+	dcircle(const Wizard& u, double additionalRadius = 38) : circle(u, additionalRadius), sightRange(u.getVisionRange()) { }
 
 	bool operator<(const dcircle& c) const {
 		return id < c.id;
@@ -134,7 +134,7 @@ bool checkCollision(const point& a, const point& b, const circle& c) {
 	double B = abx / d;
 	double C = -(A * a.x + B * a.y);
 
-	if (A * c.x + B * c.y + C < c.radius) return true;
+	if (fabs(A * c.x + B * c.y + C) < c.radius + 1e-2) return true;
 	return false;
 }
 
@@ -160,7 +160,7 @@ bool checkCollision(const point& a, const point& b, const CircularUnit& c) {
 	double B = abx / d;
 	double C = -(A * a.getX() + B * a.getY());
 
-	if (A * c.getX() + B * c.getY() + C < c.getRadius() + 1e-2) return true;
+	if (fabs(A * c.getX() + B * c.getY() + C) < c.getRadius() + 1e-2) return true;
 	return false;
 }
 
@@ -280,6 +280,8 @@ bool checkCollisions(double ax, double ay, double bx, double by) {
 	double dy = cellSize * (by > ay ? 1 : -1);
 	int dj = (by > ay ? 1 : -1);
 	j = (int) (sy / cellSize);
+	sy += dy;
+	j += dj;
 	while (sy * dj < by * dj) {
 		double x = -(B * sy + C) / A;
 		i = (int)floor(x / cellSize);
@@ -315,6 +317,28 @@ bool checkCollisions(const point& a, const point &b) {
 void smoothenPath(list<point>& path) {
 	list<point>::iterator itl, itr, it_end;
 	itl = path.begin();
+
+	int init_size = path.size();
+
+	it_end = path.end();
+	auto itl_next = itl;
+	itr = it_end;
+	itr--;
+	itl_next++;
+	while (itr != itl_next) {
+		if (!checkCollisions(*itl, *itr)) {
+			path.erase(itl_next, itr);
+			break;
+		}
+		itr--;
+	}
+	path.pop_front();
+	cout << "path start-optimized for \t" << init_size << " -> \t" << path.size() << endl;
+}
+
+void smoothenPathFull(list<point>& path) {
+	list<point>::iterator itl, itr, it_end;
+	itl = path.begin();
 	
 	int init_size = path.size();
 
@@ -339,7 +363,7 @@ void smoothenPath(list<point>& path) {
 		itl++;
 	}
 
-	cout << "path optimized for \t" << init_size << " -> \t" << path.size() << endl;
+	cout << "path full-optimized for \t" << init_size << " -> \t" << path.size() << endl;
 }
 
 auto findPath(const point& start, const point& dest, double step = 20.0) {
@@ -442,6 +466,10 @@ auto findPath(const point& start, const point& dest, double step = 20.0) {
 	while (p_cur != pstart) {
 		path.push_front(point(x + p_cur.first * step, y + p_cur.second * step));
 		p_cur = cameFrom[p_cur];
+	}
+	path.push_front(start);
+	if (path.size() < 3) {
+		cout << "short path!" << endl;
 	}
 	smoothenPath(path);
 	return path;
@@ -618,6 +646,7 @@ void removeObjectsFromMap(vector< vector< vector< circle > > > &mp, const set<ci
 
 long long cum_move_time = 0;
 int tick = 0;
+set<int> treesSet;
 void MyStrategy::move(const Wizard& self, const World& world, const Game& game, Move& move) {
 	bool inBattle = false;
 	auto move_start_time = time();
@@ -635,14 +664,33 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 	auto buildings = world.getBuildings();
 	for (auto& b : buildings) staticObjects.insert(b);
 	auto trees = world.getTrees();
-	for (auto& t : trees) staticObjects.insert(t);
+	int sizeWas = treesSet.size();
+	for (auto& t : trees) {
+		staticObjects.insert(t);
+		treesSet.insert(t.getId());
+	}
+	bool newTrees = false;
+	if (treesSet.size() > sizeWas) newTrees = true;
+
+	double selfx = self.getX();
+	double selfy = self.getY();
 
 	auto minions = world.getMinions();
-	for (auto & m : minions) dynamicObjects.insert(m);
+	for (auto & m : minions) {
+		dcircle d(m);
+		if (sqr(selfx - d.x) + sqr(selfy - d.y) < sqr(d.radius + 1e-2)) {
+			d.radius -= 3;
+		}
+		dynamicObjects.insert(d);
+	}
 	auto players = world.getWizards();
 	for (auto & m : players) {
 		if (!m.isMe()) {
-			dynamicObjects.insert(m);
+			dcircle d(m);
+			if (sqr(selfx - d.x) + sqr(selfy - d.y) < sqr(d.radius + 1e-2)) {
+				d.radius -= 3;
+			}
+			dynamicObjects.insert(d);
 		}
 	}
 
@@ -687,10 +735,30 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		if (!curWay.empty()) {
 			bool needToRecountPath = false;
 			auto dobjects = cellByXY(self.getX(), self.getY(), dynamicMap);
-			if (dobjects->size() > 0) needToRecountPath = true;
+			if (dobjects->size() > 0) {
+				bool tooClose = false;
+				for (auto& d : (*dobjects)) {
+					if (sqrt(sqr(selfx - d.x) + sqr(selfy - d.y)) < d.radius + 20.0) {
+						tooClose = true;
+						break;
+					}
+				}
+				if (tooClose) {
+					cout << "too close dyn objects here: " << dobjects->size() << endl;
+					needToRecountPath = true;
+				}
+			}
 			if (self.getDistanceTo(curWay.front()) < 1e-2) {
 				cout << "recalc route, too close to WP: " << self.getX() << " \t" << self.getY() << endl;
 				needToRecountPath = true;
+			}
+			if((tick > 1) && (fabs(self.getSpeedX()) + fabs(self.getSpeedY()) < 1e-2)) {
+				needToRecountPath = true;
+				cout << "We are struck!" << endl;
+			}
+			if (newTrees) {
+				needToRecountPath = true;
+				cout << "New tree spawned!" << endl;
 			}
 			if (needToRecountPath) {
 				auto ts = time();
@@ -699,6 +767,10 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 				cumulative += time() - ts;
 				cout << "time spent for path: " << (time() - ts) / 1000000 << " \t " << cumulative / 1000000 << endl;
 				cout << "next WP: " << curWay.front().x << " \t" << curWay.front().y << endl;
+
+#ifndef _DEBUG
+				//system("pause");
+#endif
 			}
 			if (!curWay.empty()) {
 				setMoveToPoint(self, move, curWay.front());
@@ -709,6 +781,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 			}
 		}
 		else {
+			cout << "path is empty! go to the top rune!" << endl;
 			curWay = findPath(point(self.getX(), self.getY()), point(1200, 1200)); //!!!!!!!!!!!!!!!!!!!!!!!!!! просто тест поиска пути
 		}
 	}
