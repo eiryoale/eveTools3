@@ -233,7 +233,7 @@ template<class circle_class> vector<circle_class>* cellByXY(double x, double y, 
 	return &(objects[(int)floor(x / cellSize)][(int)floor(y / cellSize)]);
 }
 
-bool checkCollisions(double ax, double ay, double bx, double by, const vector< vector< vector<circle> > >& objects) {
+bool checkCollisions(double ax, double ay, double bx, double by) {
 	typedef pair<int, int> pt;
 	set<pt> cells;
 	double A, B, C;
@@ -241,6 +241,12 @@ bool checkCollisions(double ax, double ay, double bx, double by, const vector< v
 	B = bx - ax;
 	C = -(A * ax + B * ay);
 	
+	/*
+	if (fabs(A * bx + B * by + C) > 1e-8) {
+		cout << "ERROR in line formula" << endl;
+	}
+	*/
+
 	double sx = floor(ax / cellSize);
 	double sy = floor(ay / cellSize);
 
@@ -248,6 +254,7 @@ bool checkCollisions(double ax, double ay, double bx, double by, const vector< v
 	i = (int)sx;
 
 	cells.insert(pt((int)sx, (int)sy));
+	cells.insert(pt((int)floor(bx / cellSize), (int)floor(by / cellSize)));
 	sx *= cellSize;
 	sy *= cellSize;
 
@@ -256,34 +263,83 @@ bool checkCollisions(double ax, double ay, double bx, double by, const vector< v
 	sx += dx;
 	i+=di;
 	while (sx * di < bx * di) {
-		static double y = -(A * sx + C) / B;
+		double y = -(A * sx + C) / B;
 		j = (int)floor(y / cellSize);
 		cells.insert(pt(i, j));
 		cells.insert(pt(i - 1, j));
 		i += di;
 		sx += dx;
+		if (i < 0) {
+			cout << "ERROR i < 0!" << endl;
+		}
+		if (j < 0) {
+			cout << "ERROR j < 0!" << endl;
+		}
 	}
 
 	double dy = cellSize * (by > ay ? 1 : -1);
 	int dj = (by > ay ? 1 : -1);
 	j = (int) (sy / cellSize);
 	while (sy * dj < by * dj) {
-		static double x = -(B * sy + C) / A;
+		double x = -(B * sy + C) / A;
 		i = (int)floor(x / cellSize);
 		cells.insert(pt(i, j));
 		cells.insert(pt(i, j - 1));
 		j += dj;
 		sy += dy;
+		if (i < 0) {
+			cout << "ERROR i < 0!" << endl;
+		}
+		if (j < 0) {
+			cout << "ERROR j < 0!" << endl;
+		}
 	}
 
 	point a(ax, ay), b(bx, by);
 	for (const auto&c : cells) {
-		for (const auto& obj : objects[c.first][c.second]) {
+		for (const auto& obj : staticMap[c.first][c.second]) {
+			if (checkCollision(a, b, obj)) return true;
+		}
+		for (const auto& obj : dynamicMap[c.first][c.second]) {
 			if (checkCollision(a, b, obj)) return true;
 		}
 	}
 
 	return false;
+}
+
+bool checkCollisions(const point& a, const point &b) {
+	return checkCollisions(a.getX(), a.getY(), b.getX(), b.getY());
+}
+
+void smoothenPath(list<point>& path) {
+	list<point>::iterator itl, itr, it_end;
+	itl = path.begin();
+	
+	int init_size = path.size();
+
+	it_end = path.end();
+	it_end--;
+	auto itl_next = itl;
+	while (itl != it_end) {
+		itr = it_end;
+		itl_next = itl;
+		itl_next++;
+		while (itr != itl_next) {
+			if (!checkCollisions(*itl, *itr)) {
+				auto ti1 = itl;
+				ti1++;
+				path.erase(ti1, itr);
+				break;
+			}
+
+			itr--;
+		}
+
+		itl++;
+	}
+
+	cout << "path optimized for \t" << init_size << " -> \t" << path.size() << endl;
 }
 
 auto findPath(const point& start, const point& dest, double step = 20.0) {
@@ -387,6 +443,7 @@ auto findPath(const point& start, const point& dest, double step = 20.0) {
 		path.push_front(point(x + p_cur.first * step, y + p_cur.second * step));
 		p_cur = cameFrom[p_cur];
 	}
+	smoothenPath(path);
 	return path;
 }
 
@@ -603,7 +660,22 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 
 	for (auto& c : killedStaticObjects) {
 		//!!!!!!!!!!!!!!!!!!!!!!!!!! check if any dynamic obj. or *building* should see that object
-
+		auto cell = cellByXY(c.x, c.y, dynamicMap);
+		bool insight = false;
+		for (auto& d : (*cell)) {
+			if (sqr(d.sightRange) < sqr(d.x - c.x) + sqr(d.y - c.y)) {
+				toRemove.insert(c);
+				insight = true;
+				break;
+			}
+		}
+		if (insight) break;
+		for (auto& b : buildings) {
+			if (sqr(b.getVisionRange()) < sqr(b.getX() - c.x) + sqr(b.getY() - c.y)) {
+				toRemove.insert(c);
+				break;
+			}
+		}
 	}
 	
 	removeObjectsFromMap(staticMap, toRemove, cellSize, cellSize);
@@ -616,13 +688,17 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 			bool needToRecountPath = false;
 			auto dobjects = cellByXY(self.getX(), self.getY(), dynamicMap);
 			if (dobjects->size() > 0) needToRecountPath = true;
-			if (self.getDistanceTo(curWay.front()) < 1e-2) needToRecountPath = true;
+			if (self.getDistanceTo(curWay.front()) < 1e-2) {
+				cout << "recalc route, too close to WP: " << self.getX() << " \t" << self.getY() << endl;
+				needToRecountPath = true;
+			}
 			if (needToRecountPath) {
 				auto ts = time();
 				static long long cumulative = 0;
 				curWay = findPath(point(self.getX(), self.getY()), point(1200, 1200));
 				cumulative += time() - ts;
 				cout << "time spent for path: " << (time() - ts) / 1000000 << " \t " << cumulative / 1000000 << endl;
+				cout << "next WP: " << curWay.front().x << " \t" << curWay.front().y << endl;
 			}
 			if (!curWay.empty()) {
 				setMoveToPoint(self, move, curWay.front());
@@ -631,6 +707,9 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 					move.setTurn(self.getAngleTo(curWay.front()));
 				}
 			}
+		}
+		else {
+			curWay = findPath(point(self.getX(), self.getY()), point(1200, 1200)); //!!!!!!!!!!!!!!!!!!!!!!!!!! просто тест поиска пути
 		}
 	}
 
