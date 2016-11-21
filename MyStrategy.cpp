@@ -647,88 +647,141 @@ void removeObjectsFromMap(vector< vector< vector< circle > > > &mp, const set<ci
 long long cum_move_time = 0;
 int tick = 0;
 set<int> treesSet;
-point top_lane(100, 100), mid_lane(2000, 2000), bot_lane(3900, 3900);
+point top_lane(200, 200), mid_lane(2000, 2000), bot_lane(3800, 3800), top_rune(1200, 1200), bot_rune(2800, 2800);
+#define PUSH_TOP 1
+int cur_strategy = PUSH_TOP;
 
 void MyStrategy::move(const Wizard& self, const World& world, const Game& game, Move& move) {
 	bool inBattle = false;
 	auto move_start_time = time();
-	tick++;
-	// ========================================================= Prepare map ===================================================================================================================================================================
 	set<circle> staticObjects, newStaticObjects, killedStaticObjects;
 	set<dcircle> dynamicObjects;
-	
-	for (auto &row : dynamicMap) {
-		for (auto& cell : row) {
-			cell.resize(0);
-		}
-	}
-
 	auto buildings = world.getBuildings();
-	for (auto& b : buildings) staticObjects.insert(b);
 	auto trees = world.getTrees();
-	int sizeWas = treesSet.size();
-	for (auto& t : trees) {
-		staticObjects.insert(t);
-		treesSet.insert(t.getId());
-	}
-	bool newTrees = false;
-	if (treesSet.size() > sizeWas) newTrees = true;
+	auto minions = world.getMinions();
+	auto players = world.getWizards();
+	set<circle> toRemove;
 
+	bool newTrees = false;
 	double selfx = self.getX();
 	double selfy = self.getY();
 
-	auto minions = world.getMinions();
-	for (auto & m : minions) {
-		dcircle d(m);
-		if (sqr(selfx - d.x) + sqr(selfy - d.y) < sqr(d.radius + 1e-2)) {
-			d.radius -= 3;
+	tick++;
+	// ========================================================= Prepare map ===================================================================================================================================================================
+	{
+		for (auto &row : dynamicMap) {
+			for (auto& cell : row) {
+				cell.resize(0);
+			}
 		}
-		dynamicObjects.insert(d);
-	}
-	auto players = world.getWizards();
-	for (auto & m : players) {
-		if (!m.isMe()) {
+
+
+		for (auto& b : buildings) staticObjects.insert(b);
+		int sizeWas = treesSet.size();
+		for (auto& t : trees) {
+			staticObjects.insert(t);
+			treesSet.insert(t.getId());
+		}
+		if (treesSet.size() > sizeWas) newTrees = true;
+
+		for (auto & m : minions) {
 			dcircle d(m);
 			if (sqr(selfx - d.x) + sqr(selfy - d.y) < sqr(d.radius + 1e-2)) {
 				d.radius -= 3;
 			}
 			dynamicObjects.insert(d);
 		}
-	}
 
-	
-	set_difference(staticObjects.begin(), staticObjects.end(), prevStaticObjects.begin(), prevStaticObjects.end(), inserter(newStaticObjects, newStaticObjects.end()));
-	set_difference(prevStaticObjects.begin(), prevStaticObjects.end(), staticObjects.begin(), staticObjects.end(), inserter(killedStaticObjects, killedStaticObjects.end()));
-
-	prevStaticObjects = staticObjects;
-
-	addObjectsToMap(staticMap, newStaticObjects, cellSize, cellSize);
-	addObjectsToMap(dynamicMap, dynamicObjects, cellSize, cellSize);
-
-	// ----------- remove killed objects
-	set<circle> toRemove;
-
-	for (auto& c : killedStaticObjects) {
-		//!!!!!!!!!!!!!!!!!!!!!!!!!! check if any dynamic obj. or *building* should see that object
-		auto cell = cellByXY(c.x, c.y, dynamicMap);
-		bool insight = false;
-		for (auto& d : (*cell)) {
-			if (sqr(d.sightRange) < sqr(d.x - c.x) + sqr(d.y - c.y)) {
-				toRemove.insert(c);
-				insight = true;
-				break;
+		for (auto & m : players) {
+			if (!m.isMe()) {
+				dcircle d(m);
+				if (sqr(selfx - d.x) + sqr(selfy - d.y) < sqr(d.radius + 1e-2)) {
+					d.radius -= 3;
+				}
+				dynamicObjects.insert(d);
 			}
 		}
-		if (insight) break;
-		for (auto& b : buildings) {
-			if (sqr(b.getVisionRange()) < sqr(b.getX() - c.x) + sqr(b.getY() - c.y)) {
-				toRemove.insert(c);
-				break;
+
+
+		set_difference(staticObjects.begin(), staticObjects.end(), prevStaticObjects.begin(), prevStaticObjects.end(), inserter(newStaticObjects, newStaticObjects.end()));
+		set_difference(prevStaticObjects.begin(), prevStaticObjects.end(), staticObjects.begin(), staticObjects.end(), inserter(killedStaticObjects, killedStaticObjects.end()));
+
+		prevStaticObjects = staticObjects;
+
+		addObjectsToMap(staticMap, newStaticObjects, cellSize, cellSize);
+		addObjectsToMap(dynamicMap, dynamicObjects, cellSize, cellSize);
+
+		// ----------- remove killed objects
+
+		for (auto& c : killedStaticObjects) {
+			//!!!!!!!!!!!!!!!!!!!!!!!!!! check if any dynamic obj. or *building* should see that object
+			auto cell = cellByXY(c.x, c.y, dynamicMap);
+			bool insight = false;
+			for (auto& d : (*cell)) {
+				if (sqr(d.sightRange) < sqr(d.x - c.x) + sqr(d.y - c.y)) {
+					toRemove.insert(c);
+					insight = true;
+					break;
+				}
+			}
+			if (insight) break;
+			for (auto& b : buildings) {
+				if (sqr(b.getVisionRange()) < sqr(b.getX() - c.x) + sqr(b.getY() - c.y)) {
+					toRemove.insert(c);
+					break;
+				}
+			}
+		}
+
+		removeObjectsFromMap(staticMap, toRemove, cellSize, cellSize);
+	}
+
+	// ========================================================= Strategy ===================================================================================================================================================================
+	{
+	}
+
+	// ========================================================= Micro ===================================================================================================================================================================
+	{
+	}
+
+	// ========================================================= Attack ===================================================================================================================================================================
+	{
+		const auto myFaction = self.getFaction();
+		if (!self.getRemainingActionCooldownTicks()) {
+			if (self.getRemainingCooldownTicksByAction()[ACTION_MAGIC_MISSILE] < 1) {
+				CircularUnit *aim = NULL;
+				for (auto&w : players) {
+					if (w.getFaction() != myFaction) {
+						if (fabs(self.getAngleTo(w) <= PI / 12.0)) {
+							if (self.getDistanceTo(w) < 510) {
+								aim = (CircularUnit *)(&w);
+							}
+						}
+					}
+				}
+				if (aim == NULL) {
+					for (auto&w : minions) {
+						if (w.getFaction() != myFaction) {
+							if (fabs(self.getAngleTo(w) <= PI / 12.0)) {
+								if (self.getDistanceTo(w) < 510) {
+									aim = (CircularUnit *)(&w);
+								}
+							}
+						}
+					}
+				}
+				if (aim != NULL) {
+					move.setAction(ACTION_MAGIC_MISSILE);
+					move.setCastAngle(self.getAngleTo(*aim));
+					move.setMinCastDistance(self.getDistanceTo(*aim) - 8);
+					move.setMaxCastDistance(500);
+				}
+			}
+			else {
+				if (self.getRemainingCooldownTicksByAction()[ACTION_STAFF] < 1) move.setAction(ACTION_STAFF);
 			}
 		}
 	}
-	
-	removeObjectsFromMap(staticMap, toRemove, cellSize, cellSize);
 
 	// ========================================================= Movement ===================================================================================================================================================================
 	{
@@ -765,7 +818,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 			if (needToRecountPath) {
 				auto ts = time();
 				static long long cumulative = 0;
-				curWay = findPath(point(self.getX(), self.getY()), point(1200, 1200));
+				curWay = findPath(point(self.getX(), self.getY()), top_lane);
 				cumulative += time() - ts;
 				cout << "time spent for path: " << (time() - ts) / 1000000 << " \t " << cumulative / 1000000 << endl;
 				cout << "next WP: " << curWay.front().x << " \t" << curWay.front().y << endl;
@@ -784,12 +837,12 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		}
 		else {
 			cout << "path is empty! go to the top rune!" << endl;
-			curWay = findPath(point(self.getX(), self.getY()), point(1200, 1200)); //!!!!!!!!!!!!!!!!!!!!!!!!!! просто тест поиска пути
+			curWay = findPath(point(self.getX(), self.getY()), top_lane); //!!!!!!!!!!!!!!!!!!!!!!!!!! просто тест поиска пути
 		}
 	}
 
 	cum_move_time += time() - move_start_time;
-	cout << "Time per tick(0.01ms): " << cum_move_time / tick / 10000 << endl;
+	cout << tick << ":\t Time per tick(us): " << cum_move_time / tick / 1000 << endl;
 }
 
 MyStrategy::MyStrategy() { 
