@@ -651,6 +651,10 @@ point top_lane(200, 200), mid_lane(2000, 2000), bot_lane(3800, 3800), top_rune(1
 #define PUSH_TOP 1
 int cur_strategy = PUSH_TOP;
 
+#define GET_RUNE 1
+#define PUSH 2
+int cur_aim = PUSH;
+
 void MyStrategy::move(const Wizard& self, const World& world, const Game& game, Move& move) {
 	bool inBattle = false;
 	auto move_start_time = time();
