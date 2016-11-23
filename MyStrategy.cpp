@@ -195,9 +195,17 @@ template <class circle_class> bool checkCollisionsShort(double ax, double ay, do
 	
 	pt a_pt((int)floor(ax / cellSize), (int)floor(ay / cellSize));
 	pt b_pt((int)floor(bx / cellSize), (int)floor(by / cellSize));
-	cells.insert(a_pt);
+	if ((a_pt.first >= 0) && (a_pt.first < objects.size())) {
+		if ((a_pt.second >= 0) && (a_pt.second < objects.size())) {
+			cells.insert(a_pt);
+		}
+	}
 	if (a_pt != b_pt) {
-		cells.insert(b_pt);
+		if ((b_pt.first >= 0) && (b_pt.first < objects.size())) {
+			if ((b_pt.second >= 0) && (b_pt.second < objects.size())) {
+				cells.insert(b_pt);
+			}
+		}
 
 		if ((a_pt.first != b_pt.first) && (a_pt.second != b_pt.second)) {
 			double A, B, C;
@@ -487,6 +495,117 @@ auto findPath(const point& start, const point& dest, double step = 20.0) {
 	smoothenPath(path);
 	return path;
 }
+
+auto findPathToZone(const point& start, const point& dest, const double rad, double step = 20.0) {
+	typedef pair<int, int> pt;
+	typedef pair<double, pt > qtype;
+
+	auto h = [rad](const pt&a, const pt&b) -> double {return max(0.0, sqrt((double)(sqr(a.first - b.first) + sqr(a.second - b.second))) - rad); };
+
+	list<point> path;
+
+	unordered_set<pt> closed, openSet;
+	priority_queue < qtype, vector<qtype>, std::greater<qtype> > open;
+	unordered_map<pt, pt> cameFrom;
+
+	unordered_map<pt, double> gscore;
+
+	// !!!!!!!!!!! goal может быть недостижима. Надо как минимум осматривать несколько соседних точек.
+	pt pstart(0, 0), goal((int)floor((dest.getX() - start.getX()) / step), (int)floor((dest.getY() - start.getY()) / step)); // !!!!!!!!!!! goal может быть недостижима. Надо как минимум осматривать несколько соседних точек.
+
+	gscore[pstart] = 0.0;
+
+	open.push(qtype(h(pstart, goal), pt(0, 0)));
+	openSet.insert(pt(0, 0));
+
+	bool good = false;
+	qtype cur;
+	while (!open.empty()) {
+		cur = open.top();
+		while (closed.find(cur.second) != closed.end()) {
+			open.pop();
+			cur = open.top();
+		}
+		if (sqr(cur.second.first - goal.first) + sqr(cur.second.second - goal.second) <= sqr(rad/step)) {
+			good = true;
+			break;
+		}
+
+		open.pop();
+		openSet.erase(cur.second);
+		closed.insert(cur.second);
+		double curx = step * cur.second.first + start.getX();
+		double cury = step * cur.second.second + start.getY();
+		for (int i = -1; i < 2; i++) {
+			for (int j = -1; j < 2; j++) {
+				if ((0 == j) && (i == 0)) continue;
+
+				auto neib = pt(cur.second.first + i, cur.second.second + j);
+
+				double nx = step * neib.first + start.getX();
+				double ny = step * neib.second + start.getY();
+
+				int cellx = (int)floor(nx / cellSize);
+				int celly = (int)floor(ny / cellSize);
+				if (cellx < 0) {
+					closed.insert(neib);
+					continue;
+				}
+				if (celly < 0) {
+					closed.insert(neib);
+					continue;
+				}
+
+				bool inObstalce = false;
+				inObstalce = checkCollisionsShort(curx, cury, nx, ny, staticMap);
+				if (!inObstalce) inObstalce = checkCollisionsShort(curx, cury, nx, ny, dynamicMap);
+				//inObstalce = checkCollisions(curx, cury, nx, ny, staticMap);
+				/*
+				for (auto &c : staticMap[cellx][celly]) {
+				if (sqr(c.radius) > sqr(c.x - nx) + sqr(c.y - ny)) {
+				inObstalce = true;
+				break;
+				}
+				}
+				*/
+
+				if (inObstalce) {
+					closed.insert(neib);
+					continue;
+				}
+
+				if (closed.find(neib) == closed.end()) {
+					auto tScore = gscore[cur.second] + sqrt((double)(abs(i) + abs(j)));
+					if (gscore.find(neib) != gscore.end()) {
+						if (gscore[neib] <= tScore) continue;
+					}
+					gscore[neib] = tScore;
+					cameFrom[neib] = cur.second;
+					open.push(qtype(tScore + h(neib, goal), neib));
+					openSet.insert(neib);
+				}
+			}
+		}
+	}
+
+	if (!good) return path;
+	pt p_cur = cur.second;
+	double x = start.getX();
+	double y = start.getY();
+	path.clear();
+	path.push_front(dest);
+	while (p_cur != pstart) {
+		path.push_front(point(x + p_cur.first * step, y + p_cur.second * step));
+		p_cur = cameFrom[p_cur];
+	}
+	path.push_front(start);
+	if (path.size() < 3) {
+		cout << "short path!" << endl;
+	}
+	smoothenPath(path);
+	return path;
+}
+
 
 list <point> curWay;
 double posX = 0, posY = 0;
@@ -906,7 +1025,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 				if (dobjects->size() > 0) {
 					bool tooClose = false;
 					for (auto& d : (*dobjects)) {
-						if (sqrt(sqr(selfx - d.x) + sqr(selfy - d.y)) < d.radius + 20.0) {
+						if (sqrt(sqr(selfx - d.x) + sqr(selfy - d.y)) < d.radius + 10.0) {
 							tooClose = true;
 							break;
 						}
@@ -931,7 +1050,12 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 				if (needToRecountPath) {
 					auto ts = time();
 					static long long cumulative = 0;
-					curWay = findPath(point(self.getX(), self.getY()), destination);
+					if (cur_aim == PUSH) {
+						curWay = findPathToZone(point(self.getX(), self.getY()), destination, 400.0);
+					}
+					else {
+						curWay = findPath(point(self.getX(), self.getY()), destination);
+					}
 					cumulative += time() - ts;
 					cout << "time spent for path: " << (time() - ts) / 1000000 << " \t " << cumulative / 1000000 << endl;
 					cout << "next WP: " << curWay.front().x << " \t" << curWay.front().y << endl;
