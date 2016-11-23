@@ -16,9 +16,12 @@
 #include <unordered_map>
 #include <map>
 #include <stack>
+#include <list>
 
 using namespace model;
 using namespace std;
+
+model::Faction enFaction, myFaction;
 
 long long time() {
 	return chrono::high_resolution_clock::now().time_since_epoch().count();
@@ -42,12 +45,16 @@ template <class T> inline double sqr(T x) {
 	return x * x;
 }
 
-template<>
-struct hash<pair<int, int> >
-	: public _Bitwise_hash<pair<int, int> >
-{	// hash functor for bool
-};
-
+namespace std {
+	template <>
+	struct hash<pair<int, int>>
+	{
+		std::size_t operator()(const pair<int, int>& k) const
+		{
+			return ((k.first) << 10) | (k.second); // мы знаем, что этот хэш исопльзуется для клеток, и их значения вполне предсказуемы.
+		}
+	};
+}
 struct circle {
 	double radius = 0.0;
 	double x = 0.0, y = 0.0;
@@ -206,7 +213,12 @@ template <class circle_class> bool checkCollisionsShort(double ax, double ay, do
 			
 			double crossx = floor(bx / cellSize) * cellSize;
 			double crossy = -(C + A * crossx) / B;
-			cells.insert(pt(b_pt.first, (int)floor(crossy / cellSize)));
+			int sec = (int)floor(crossy / cellSize);
+			if ((b_pt.first >= 0) && (b_pt.first < objects.size())) {
+				if ((sec >= 0) && (sec < objects.size())) {
+					cells.insert(pt(b_pt.first, sec));
+				}
+			}
 		}
 	}
 
@@ -380,6 +392,7 @@ auto findPath(const point& start, const point& dest, double step = 20.0) {
 	
 	unordered_map<pt, double> gscore;
 
+	// !!!!!!!!!!! goal может быть недостижима. Надо как минимум осматривать несколько соседних точек.
 	pt pstart(0, 0), goal((int) floor((dest.getX() - start.getX()) / step), (int) floor((dest.getY() - start.getY())/ step)); // !!!!!!!!!!! goal может быть недостижима. Надо как минимум осматривать несколько соседних точек.
 	
 	gscore[pstart] = 0.0;
@@ -642,18 +655,79 @@ void removeObjectsFromMap(vector< vector< vector< circle > > > &mp, const set<ci
 	}
 }
 
+#define TOP 1
+#define MID 2
+#define BOT 3
+#define OTHER 4
+int getUnitLane(double x, double y) {
+	if ((x < 800) || (y < 800)) return TOP;
+	if ((x > 3200) || (y > 3200)) return BOT;
+	if (fabs(x - y) < 400) return MID;
 
+	return OTHER;
+}
+
+point getTopFront(const World& world) {
+	double maxx = 0, miny = 4000.0;
+
+	auto& minions = world.getMinions();
+	for (auto& m : minions) {
+		if (m.getFaction() == myFaction) {
+			double mx = m.getX();
+			double my = m.getY();
+			if (getUnitLane(mx, my) == TOP) {
+				mx += m.getVisionRange();
+				my -= m.getVisionRange();
+				if (mx > maxx) maxx = mx;
+				if (my < miny) miny = my;
+			}
+		}
+	}
+
+	auto& buildings = world.getBuildings();
+	for (auto& m : buildings) {
+		if (m.getFaction() == myFaction) {
+			double mx = m.getX();
+			double my = m.getY();
+			if (getUnitLane(mx, my) == TOP) {
+				mx += m.getVisionRange();
+				my -= m.getVisionRange();
+				if (mx > maxx) maxx = mx;
+				if (my < miny) miny = my;
+			}
+		}
+	}
+
+	auto& wizards = world.getWizards();
+	for (auto& m : wizards) {
+		if (m.getFaction() == myFaction) {
+			double mx = m.getX();
+			double my = m.getY();
+			if (getUnitLane(mx, my) == TOP) {
+				mx += m.getVisionRange();
+				my -= m.getVisionRange();
+				if (mx > maxx) maxx = mx;
+				if (my < miny) miny = my;
+			}
+		}
+	}
+
+	if (miny < 200) return point(maxx, 200);
+	return point(200, miny);
+}
 
 long long cum_move_time = 0;
 int tick = 0;
-set<int> treesSet;
-point top_lane(200, 200), mid_lane(2000, 2000), bot_lane(3800, 3800), top_rune(1200, 1200), bot_rune(2800, 2800);
+set<long long> treesSet;
+point destination(0,0), top_rune(1200, 1200), bot_rune(2800, 2800);
 #define PUSH_TOP 1
 int cur_strategy = PUSH_TOP;
 
 #define GET_RUNE 1
 #define PUSH 2
 int cur_aim = PUSH;
+
+const double nearTreshold = 600; 
 
 void MyStrategy::move(const Wizard& self, const World& world, const Game& game, Move& move) {
 	bool inBattle = false;
@@ -664,13 +738,26 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 	auto trees = world.getTrees();
 	auto minions = world.getMinions();
 	auto players = world.getWizards();
-	set<circle> toRemove;
+	set<circle> toRemove;	//!!!!!!!!!!!!!!!!!! здесь скорее всего лучше вектора использовать, ане сеты
+	set <dcircle> enemies, enemiesNear;
 
+	vector<CircularUnit> enemiesNearCircular;
+	enemiesNearCircular.reserve(20);
+	
 	bool newTrees = false;
 	double selfx = self.getX();
 	double selfy = self.getY();
 
 	tick++;
+
+	myFaction = self.getFaction();
+	if (self.getFaction() == FACTION_ACADEMY) {
+		enFaction = FACTION_RENEGADES;
+	}
+	else {
+		enFaction = FACTION_ACADEMY;
+	}
+
 	// ========================================================= Prepare map ===================================================================================================================================================================
 	{
 		for (auto &row : dynamicMap) {
@@ -694,6 +781,14 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 				d.radius -= 3;
 			}
 			dynamicObjects.insert(d);
+
+			if (m.getFaction() == enFaction) {
+				enemies.insert(d);
+				if (sqr(selfx - d.x) + sqr(selfy - d.y) < sqr(d.radius - 30 + nearTreshold)) {
+					enemiesNear.insert(d);
+					enemiesNearCircular.push_back(m);
+				}
+			}
 		}
 
 		for (auto & m : players) {
@@ -703,6 +798,14 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 					d.radius -= 3;
 				}
 				dynamicObjects.insert(d);
+
+				if (m.getFaction() == enFaction) {
+					enemies.insert(d);
+					if (sqr(selfx - d.x) + sqr(selfy - d.y) < sqr(d.radius - 30 + nearTreshold)) {
+						enemiesNear.insert(d);
+						enemiesNearCircular.push_back(m);
+					}
+				}
 			}
 		}
 
@@ -740,8 +843,25 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		removeObjectsFromMap(staticMap, toRemove, cellSize, cellSize);
 	}
 
-	// ========================================================= Strategy ===================================================================================================================================================================
-	{
+	// ========================================================= Combat? ===================================================================================================================================================================
+#pragma region "Combat"
+	inBattle = false;
+	if (enemiesNear.size() > 0) {
+		inBattle = true;
+	}
+
+#pragma endregion
+
+
+	// ========================================================= Global Movement ===================================================================================================================================================================
+	if(!inBattle) {
+		//!!!!!!!!!!!!!!!! CHECK RUNE
+
+		//assume we shouldn't go for the rune
+		if (cur_strategy == PUSH_TOP) {
+			destination = getTopFront(world);
+			cout << "DEST: " << floor(destination.x) << " \t" << destination.y << endl;
+		}
 	}
 
 	// ========================================================= Micro ===================================================================================================================================================================
@@ -750,36 +870,26 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 
 	// ========================================================= Attack ===================================================================================================================================================================
 	{
-		const auto myFaction = self.getFaction();
 		if (!self.getRemainingActionCooldownTicks()) {
 			if (self.getRemainingCooldownTicksByAction()[ACTION_MAGIC_MISSILE] < 1) {
 				CircularUnit *aim = NULL;
-				for (auto&w : players) {
-					if (w.getFaction() != myFaction) {
-						if (fabs(self.getAngleTo(w) <= PI / 12.0)) {
-							if (self.getDistanceTo(w) < 510) {
-								aim = (CircularUnit *)(&w);
-							}
+				double bestAngle = 2 * PI;
+				for (auto&w : enemiesNearCircular) {
+					if (fabs(self.getAngleTo(w) < bestAngle)) {
+						if (self.getDistanceTo(w) < 510) {
+							aim = (CircularUnit *)(&w);
+							bestAngle = self.getAngleTo(w);
 						}
 					}
 				}
-				if (aim == NULL) {
-					for (auto&w : minions) {
-						if (w.getFaction() != myFaction) {
-							if (fabs(self.getAngleTo(w) <= PI / 12.0)) {
-								if (self.getDistanceTo(w) < 510) {
-									aim = (CircularUnit *)(&w);
-								}
-							}
-						}
-					}
-				}
-				if (aim != NULL) {
+				
+				if (bestAngle <= PI / 12.0) {
 					move.setAction(ACTION_MAGIC_MISSILE);
 					move.setCastAngle(self.getAngleTo(*aim));
-					move.setMinCastDistance(self.getDistanceTo(*aim) - 8);
-					move.setMaxCastDistance(500);
+					move.setMinCastDistance(self.getDistanceTo(*aim) - 8 - aim->getRadius());
+					move.setMaxCastDistance(550);
 				}
+				if(aim != NULL) move.setTurn(self.getAngleTo(*aim));
 			}
 			else {
 				if (self.getRemainingCooldownTicksByAction()[ACTION_STAFF] < 1) move.setAction(ACTION_STAFF);
@@ -789,64 +899,63 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 
 	// ========================================================= Movement ===================================================================================================================================================================
 	{
-		
-		
-		if (!curWay.empty()) {
-			bool needToRecountPath = false;
-			auto dobjects = cellByXY(self.getX(), self.getY(), dynamicMap);
-			if (dobjects->size() > 0) {
-				bool tooClose = false;
-				for (auto& d : (*dobjects)) {
-					if (sqrt(sqr(selfx - d.x) + sqr(selfy - d.y)) < d.radius + 20.0) {
-						tooClose = true;
-						break;
+		if (!inBattle) {
+			if (!curWay.empty()) {
+				bool needToRecountPath = false;
+				auto dobjects = cellByXY(self.getX(), self.getY(), dynamicMap);
+				if (dobjects->size() > 0) {
+					bool tooClose = false;
+					for (auto& d : (*dobjects)) {
+						if (sqrt(sqr(selfx - d.x) + sqr(selfy - d.y)) < d.radius + 20.0) {
+							tooClose = true;
+							break;
+						}
+					}
+					if (tooClose) {
+						cout << "too close dyn objects here: " << dobjects->size() << endl;
+						needToRecountPath = true;
 					}
 				}
-				if (tooClose) {
-					cout << "too close dyn objects here: " << dobjects->size() << endl;
+				if (self.getDistanceTo(curWay.front()) < 1e-2) {
+					cout << "recalc route, too close to WP: " << self.getX() << " \t" << self.getY() << endl;
 					needToRecountPath = true;
 				}
-			}
-			if (self.getDistanceTo(curWay.front()) < 1e-2) {
-				cout << "recalc route, too close to WP: " << self.getX() << " \t" << self.getY() << endl;
-				needToRecountPath = true;
-			}
-			if((tick > 1) && (fabs(self.getSpeedX()) + fabs(self.getSpeedY()) < 1e-2)) {
-				needToRecountPath = true;
-				cout << "We are struck!" << endl;
-			}
-			if (newTrees) {
-				needToRecountPath = true;
-				cout << "New tree spawned!" << endl;
-			}
-			if (needToRecountPath) {
-				auto ts = time();
-				static long long cumulative = 0;
-				curWay = findPath(point(self.getX(), self.getY()), top_lane);
-				cumulative += time() - ts;
-				cout << "time spent for path: " << (time() - ts) / 1000000 << " \t " << cumulative / 1000000 << endl;
-				cout << "next WP: " << curWay.front().x << " \t" << curWay.front().y << endl;
+				if ((tick > 1) && (fabs(self.getSpeedX()) + fabs(self.getSpeedY()) < 1e-2)) {
+					needToRecountPath = true;
+					cout << "We are struck!" << endl;
+				}
+				if (newTrees) {
+					needToRecountPath = true;
+					cout << "New tree spawned!" << endl;
+				}
+				if (needToRecountPath) {
+					auto ts = time();
+					static long long cumulative = 0;
+					curWay = findPath(point(self.getX(), self.getY()), destination);
+					cumulative += time() - ts;
+					cout << "time spent for path: " << (time() - ts) / 1000000 << " \t " << cumulative / 1000000 << endl;
+					cout << "next WP: " << curWay.front().x << " \t" << curWay.front().y << endl;
 
 #ifndef _DEBUG
-				//system("pause");
+					//system("pause");
 #endif
-			}
-			if (!curWay.empty()) {
-				setMoveToPoint(self, move, curWay.front());
+				}
+				if (!curWay.empty()) {
+					setMoveToPoint(self, move, curWay.front());
 
-				if (!inBattle) {
-					move.setTurn(self.getAngleTo(curWay.front()));
+					if (!inBattle) {
+						move.setTurn(self.getAngleTo(curWay.front()));
+					}
 				}
 			}
-		}
-		else {
-			cout << "path is empty! go to the top rune!" << endl;
-			curWay = findPath(point(self.getX(), self.getY()), top_lane); //!!!!!!!!!!!!!!!!!!!!!!!!!! просто тест поиска пути
+			else {
+				curWay = findPath(point(selfx, selfy), destination);
+			}
 		}
 	}
 
 	cum_move_time += time() - move_start_time;
-	cout << tick << ":\t Time per tick(us): " << cum_move_time / tick / 1000 << endl;
+	//cout << tick << ":\t Time per tick(us): " << cum_move_time / tick / 1000 << endl;
 }
 
 MyStrategy::MyStrategy() { 
@@ -865,6 +974,4 @@ MyStrategy::MyStrategy() {
 			cell.reserve(100);
 		}
 	}
-	
-	curWay = findPath(point(100, 3700), point(1200, 1200));
 }
