@@ -495,7 +495,7 @@ auto findPath(const point& start, const point& dest, double step = 20.0) {
 	smoothenPath(path);
 	return path;
 }
-
+ 
 auto findPathToZone(const point& start, const point& dest, const double rad, double step = 20.0) {
 	typedef pair<int, int> pt;
 	typedef pair<double, pt > qtype;
