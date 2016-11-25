@@ -428,6 +428,27 @@ template <class circle_class> bool checkCollisions(double ax, double ay, const v
 	return false;
 }
 
+bool checkCollisions(double ax, double ay, double d_rad = 0.0) {
+	if ((ax < 0.0) || (ax > 4000.0)) return false;
+	if ((ay < 0.0) || (ay > 4000.0)) return false;
+
+	int xi = (int)floor(ax / cellSize);
+	int yi = (int)floor(ay / cellSize);
+
+	for (auto& obj : staticMap[xi][yi]) {
+		if (obj.distanceTo(ax, ay) < obj.radius - d_rad) return true;
+	}
+
+	for (auto& obj : dynamicMap[xi][yi]) {
+		if (obj.distanceTo(ax, ay) < obj.radius - d_rad) return true;
+	}
+
+	return false;
+}
+
+bool checkCollisions(const point& pt, double d_rad = 0.0) {
+	return checkCollisions(pt.x, pt.y, d_rad);
+}
 
 template<class circle_class> vector<circle_class>* cellByXY(double x, double y, vector< vector< vector<circle_class> > > &objects) {
 	return &(objects[(int)floor(x / cellSize)][(int)floor(y / cellSize)]);
@@ -570,7 +591,7 @@ void smoothenPathFull(list<point>& path) {
 
 long path_ticks = 0;
 
-
+/*
 auto findPath(const point& start, const point& dest, double step = 20.0) {
 	typedef pair<int, int> pt;
 	typedef pair<double, pt > qtype;
@@ -638,15 +659,6 @@ auto findPath(const point& start, const point& dest, double step = 20.0) {
 				inObstalce = checkCollisionsShort(curx, cury, nx, ny, staticMap);
 				if(!inObstalce) inObstalce = checkCollisionsShort(curx, cury, nx, ny, dynamicMap);
 				//inObstalce = checkCollisions(curx, cury, nx, ny, staticMap);
-				/*
-				for (auto &c : staticMap[cellx][celly]) {
-					if (sqr(c.radius) > sqr(c.x - nx) + sqr(c.y - ny)) {
-						inObstalce = true;
-						break;
-					}
-				}
-				*/
-
 				if (inObstalce) {
 					closed.insert(neib);
 					continue;
@@ -693,14 +705,20 @@ auto findPath(const point& start, const point& dest, double step = 20.0) {
 	smoothenPath(path);
 	return path;
 }
- 
-auto findPathToZone(const point& start, const point& dest, const double rad, double step = 20.0) {
+*/
+
+list<point> findPathToZone(const point& start, const point& dest, const double rad, double step = 20.0, int max_Ticks = 25000) {
 	typedef pair<int, int> pt;
 	typedef pair<double, pt > qtype;
 
 	auto h = [rad](const pt&a, const pt&b) -> double {return max(0.0, sqrt((double)(sqr(a.first - b.first) + sqr(a.second - b.second))) - rad); };
 
 	list<point> path;
+	if (checkCollisions(dest, rad)) return path;
+	if (!checkCollisions(start, dest)) {
+		path.push_back(dest);
+		return path;
+	}
 
 	unordered_set<pt> closed, openSet;
 	priority_queue < qtype, vector<qtype>, std::greater<qtype> > open;
@@ -721,13 +739,13 @@ auto findPathToZone(const point& start, const point& dest, const double rad, dou
 	long cur_path_ticks = 0;
 	while (!open.empty()) {
 		cur_path_ticks++;
-		if (cur_path_ticks > 25000) break;
+		if (cur_path_ticks > max_Ticks) break;
 		cur = open.top();
 		while (closed.find(cur.second) != closed.end()) {
 			open.pop();
 			cur = open.top();
 		}
-		if (sqr(cur.second.first - goal.first) + sqr(cur.second.second - goal.second) <= sqr(rad/step)) {
+		if (sqr(cur.second.first * step - dest.x) + sqr(cur.second.second * step - dest.y) <= sqr(rad)) {
 			good = true;
 			break;
 		}
@@ -819,6 +837,10 @@ auto findPathToZone(const point& start, const point& dest, const double rad, dou
 	return path;
 }
 
+list<point> findPath(const point& start, const point& dest, double step = 20.0) {
+	if (checkCollisions(dest)) return list<point>();
+	return findPathToZone(start, dest, 0.05, step);
+}
 
 list <point> curWay;
 double posX = 0, posY = 0;
@@ -1346,7 +1368,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		}
 		cout << "best: " << best << " \t coord: " << floor(best_pt.x) << " \t" << floor(best_pt.y) << endl;
 		
-		curWay = findPathToZone(point(selfx, selfy), best_pt, 10.0, 5.0);
+		curWay = findPathToZone(point(selfx, selfy), best_pt, 10.0, 5.0, 1000);
 		if (!curWay.empty()) {
 			setMoveToPoint(self, move, curWay.front());
 		}
