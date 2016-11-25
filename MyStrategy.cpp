@@ -97,7 +97,7 @@ void TGAImage::setPixel(Colour inputcolor, int x, int y) {
 
 //Convert 2d array indexing to 1d indexing
 int TGAImage::convert2dto1d(int x, int y) {
-	return m_width * (m_height - y) + x;
+	return m_width * (m_height - y - 1) + x;
 }
 
 void TGAImage::WriteImage(string filename) {
@@ -146,6 +146,7 @@ using namespace model;
 using namespace std;
 
 model::Faction enFaction, myFaction;
+double maxSpeedX, maxSpeedY;
 
 long long time() {
 	return chrono::high_resolution_clock::now().time_since_epoch().count();
@@ -207,6 +208,7 @@ struct dcircle : circle {
 	double attackRange; // максимальное рассто€ние между центрами, при котором можно нанести урон
 	double hpPct;
 	double hp;
+	double cd;
 
 	dcircle() { }
 
@@ -214,6 +216,7 @@ struct dcircle : circle {
 
 	dcircle(const Minion& u, double additionalRadius = 38) : dcircle((LivingUnit) u, additionalRadius) {
 		sightRange = u.getVisionRange();
+		cd = u.getRemainingActionCooldownTicks();
 		type = 2; // melee
 		attackRange = 50 + 35;
 		if (u.getType() == MINION_FETISH_BLOWDART) {
@@ -225,9 +228,11 @@ struct dcircle : circle {
 		sightRange = u.getVisionRange();
 		type = 3;
 		attackRange = 510 + 35;
+		cd = u.getRemainingCooldownTicksByAction()[ACTION_MAGIC_MISSILE];
 	}
 	dcircle(const Building& u, double additionalRadius = 38) : dcircle((LivingUnit)u, additionalRadius) {
 		sightRange = u.getVisionRange();
+		cd = u.getRemainingActionCooldownTicks();
 		type = 4;
 		attackRange = 600;
 		if (u.getType() == BUILDING_FACTION_BASE) {
@@ -279,9 +284,9 @@ double maxMSY(const Wizard& w) {
 	return 4.0;// !!!!!!!!!!!!!!!!!!! Ќ”∆Ќќ ”„»“џ¬ј“№ Ѕј‘‘џ на скорость
 }
 
-bool checkCollision(const point& a, const point& b, const circle& c) {
-	if (sqr(a.x - c.x) + sqr(a.y - c.y) < sqr(c.radius)) return true;
-	if (sqr(b.x - c.x) + sqr(b.y - c.y) < sqr(c.radius)) return true;
+bool checkCollision(const point& a, const point& b, const circle& c, double d_rad = 0.0) {
+	if (sqr(a.x - c.x) + sqr(a.y - c.y) < sqr(c.radius + d_rad)) return true;
+	if (sqr(b.x - c.x) + sqr(b.y - c.y) < sqr(c.radius + d_rad)) return true;
 
 	double abx = b.x - a.x;
 	double aby = b.y - a.y;
@@ -301,7 +306,7 @@ bool checkCollision(const point& a, const point& b, const circle& c) {
 	double B = abx / d;
 	double C = -(A * a.x + B * a.y);
 
-	if (fabs(A * c.x + B * c.y + C) < c.radius + 1e-2) return true;
+	if (fabs(A * c.x + B * c.y + C) < c.radius + d_rad + 1e-2) return true;
 	return false;
 }
 
@@ -428,7 +433,7 @@ template<class circle_class> vector<circle_class>* cellByXY(double x, double y, 
 	return &(objects[(int)floor(x / cellSize)][(int)floor(y / cellSize)]);
 }
 
-bool checkCollisions(double ax, double ay, double bx, double by) {
+bool checkCollisions(double ax, double ay, double bx, double by, bool treesOnly = false, double d_rad = 0.0) {
 	typedef pair<int, int> pt;
 	set<pt> cells;
 	double A, B, C;
@@ -495,10 +500,12 @@ bool checkCollisions(double ax, double ay, double bx, double by) {
 	point a(ax, ay), b(bx, by);
 	for (const auto&c : cells) {
 		for (const auto& obj : staticMap[c.first][c.second]) {
-			if (checkCollision(a, b, obj)) return true;
+			if (checkCollision(a, b, obj, d_rad)) return true;
 		}
-		for (const auto& obj : dynamicMap[c.first][c.second]) {
-			if (checkCollision(a, b, obj)) return true;
+		if (!treesOnly) {
+			for (const auto& obj : dynamicMap[c.first][c.second]) {
+				if (checkCollision(a, b, obj, d_rad)) return true;
+			}
 		}
 	}
 
@@ -562,6 +569,7 @@ void smoothenPathFull(list<point>& path) {
 }
 
 long path_ticks = 0;
+
 
 auto findPath(const point& start, const point& dest, double step = 20.0) {
 	typedef pair<int, int> pt;
@@ -822,9 +830,6 @@ void setMoveToPoint(const Wizard& self, Move& move, const Unit& pt) {
 	posY = self.getY();
 	//cout << self.getX() << ", " << self.getY() << endl;
 	
-	double maxSpeedX = maxMSX(self); // !!!!!!!!!!!!!!!!!!! Ќ”∆Ќќ ”„»“џ¬ј“№ Ѕј‘‘џ на скорость
-	double maxSpeedY = maxMSY(self); // !!!!!!!!!!!!!!!!!!! Ќ”∆Ќќ ”„»“џ¬ј“№ Ѕј‘‘џ на скорость
-
 	double dist = self.getDistanceTo(pt);
 	if (dist <= maxSpeedX) {
 		move.setStrafeSpeed(sin(angle) * dist);
@@ -1044,20 +1049,26 @@ inline double sigmoid(const double& x, const double& dx, const double& dy) {
 	return dy * (1.0 - (x - dx) / (1.0 + fabs(x - dx)));
 }
 
+inline double sigmoidStrict(const double& x, const double& dx, const double& dy) {
+	return dy * (1.0 - tanh(x - dx));
+}
+
 const double dyingXpCoef = 10.0;
 const double damageDealCoef = 2.0;
 const double staffDamageDealCoef = 3.0;
 const double damageTakeFromMinionCoef = 2.5;
 const double damageTakeFromWizardCoef = 1.5;
 const double scareFactor = 0.03;
-const double obstacleCoef = 10.0;
-const double projectileCoef = 10.0;
+const double obstacleCoef = 20.0;
+const double projectileCoef = 20.0;
 
 vector<double> attackRangeByType = { 0, 305, 50, 565, 765 };
 
-double getPotential(double x, double y, const World& world, const set<dcircle>& enemiesNear, double myHPpct) {
+double getPotential(double x, double y, const World& world, const set<dcircle>& enemiesNear, double myHPpct, const Wizard& self) {
 	double positive = 0;
 	double negative = 0;
+
+	auto cd = self.getRemainingCooldownTicksByAction()[ACTION_MAGIC_MISSILE];
 
 	if ((x < 0.0) || (x > 4000.0)) return -1e10;
 	if ((y < 0.0) || (y > 4000.0)) return -1e10;
@@ -1066,35 +1077,43 @@ double getPotential(double x, double y, const World& world, const set<dcircle>& 
 	int yi = (int)floor(y / cellSize);
 
 	double obstacles = 0;
-	obstacles += sigmoid(x, 0, obstacleCoef);
-	obstacles += sigmoid(y, 0, obstacleCoef);
+	obstacles += sigmoidStrict(x, 0, obstacleCoef);
+	obstacles += sigmoidStrict(y, 0, obstacleCoef);
 
 	for (auto& obj : staticMap[xi][yi]) {
-		obstacles +=  sigmoid(obj.distanceTo(x, y), obj.radius, obstacleCoef);
+		obstacles += sigmoidStrict(obj.distanceTo(x, y), obj.radius, obstacleCoef);
 	}
 
 	for (auto& obj : dynamicMap[xi][yi]) {
-		obstacles += sigmoid(obj.distanceTo(x, y), obj.radius, obstacleCoef);
+		obstacles += sigmoidStrict(obj.distanceTo(x, y), obj.radius, obstacleCoef);
 	}
 
 	set<double, std::greater<double> > enemiesAttackable, enemiesAggroed;
 
+	int timeToCome = ceil(sqrt(sqr(x - self.getX()) + sqr(y - self.getY())) / maxSpeedX);
+	
 	for (auto&e : enemiesNear) {
 		double dist = e.distanceTo(x,y);
 		positive += sigmoid(dist, 600, dyingXpCoef / (0.1 + floor(e.hp / 12.0))); //!!!!!!!!!!!!!! 600 - радиус полчени€ экспы. ¬озможно, нужно считать не рассто€ние между центрами, а рассто€ние от своего центра до любой точки умирающего
 		
-		//мы хотим атаковать (стрел€ть)
-		enemiesAttackable.insert(sigmoid(dist, (500 + 10 - 38) + e.radius, damageDealCoef)); // 500 - дальность моей атаки, 10 - радиус снар€да, 38 - дополнительный радиус дин. объекта
-		
-		//мы хотим бить руками
-		enemiesAttackable.insert(sigmoid(dist, 70 - 38 + e.radius, staffDamageDealCoef)); // 70 - дальность моей атаки
-			
-		if (e.type != 3) {
-			enemiesAggroed.insert(sigmoid(dist, e.attackRange, damageTakeFromMinionCoef / (scareFactor + myHPpct)));
+		if (cd < timeToCome) {
+			//мы хотим атаковать (стрел€ть)
+			enemiesAttackable.insert(sigmoid(dist, (500 + 10 - 38) + e.radius, damageDealCoef)); // 500 - дальность моей атаки, 10 - радиус снар€да, 38 - дополнительный радиус дин. объекта
+
+			//мы хотим бить руками
+			enemiesAttackable.insert(sigmoid(dist, 70 - 38 + e.radius, staffDamageDealCoef)); // 70 - дальность моей атаки
 		}
-		else {
-			enemiesAggroed.insert(sigmoid(dist, e.attackRange + 20.0, damageTakeFromWizardCoef / (scareFactor + myHPpct)));
-			enemiesAggroed.insert(sigmoid(dist, 105.0, damageTakeFromWizardCoef / (scareFactor + myHPpct)));
+
+		if (e.cd < timeToCome) {
+			if (!checkCollisions(x, y, e.x, e.y, true, -25.0)) {
+				if (e.type != 3) {
+					enemiesAggroed.insert(sigmoid(dist, e.attackRange, damageTakeFromMinionCoef / (scareFactor + myHPpct)));
+				}
+				else {
+					enemiesAggroed.insert(sigmoid(dist, e.attackRange + 20.0, damageTakeFromWizardCoef / (scareFactor + myHPpct)));
+					enemiesAggroed.insert(sigmoid(dist, 105.0, damageTakeFromWizardCoef / (scareFactor + myHPpct)));
+				}
+			}
 		}
 	}
 	double mod = 1.0;
@@ -1108,6 +1127,7 @@ double getPotential(double x, double y, const World& world, const set<dcircle>& 
 		mod *= 2.5;
 	}
 	//!!!!!!!!!!!!!!!!! отходить от лет€щих снар€дов
+	/*
 	auto& proj = world.getProjectiles();
 
 	for (auto&p : proj) {
@@ -1122,7 +1142,7 @@ double getPotential(double x, double y, const World& world, const set<dcircle>& 
 			}
 		}
 	}
-
+	*/
 	return positive - negative - obstacles;
 }
 
@@ -1154,12 +1174,13 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 	vector<CircularUnit> enemiesNearCircular;
 	enemiesNearCircular.reserve(20);
 	
+	// ======================================================== Update Variables===================================================================================================================================================================
+	
 	bool newTrees = false;
 	double selfx = self.getX();
 	double selfy = self.getY();
 
 	tick++;
-
 	myFaction = self.getFaction();
 	if (self.getFaction() == FACTION_ACADEMY) {
 		enFaction = FACTION_RENEGADES;
@@ -1167,6 +1188,9 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 	else {
 		enFaction = FACTION_ACADEMY;
 	}
+
+	maxSpeedX = maxMSX(self); // !!!!!!!!!!!!!!!!!!! Ќ”∆Ќќ ”„»“џ¬ј“№ Ѕј‘‘џ на скорость
+	maxSpeedY = maxMSY(self); // !!!!!!!!!!!!!!!!!!! Ќ”∆Ќќ ”„»“џ¬ј“№ Ѕј‘‘џ на скорость
 
 	// ========================================================= Prepare map ===================================================================================================================================================================
 	{
@@ -1286,12 +1310,12 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		double ts = time();
 
 		double myHPpct = ((double)self.getLife()) / ((double)self.getMaxLife());
-		auto best = getPotential(selfx, selfy, world, enemiesNear, myHPpct);
+		auto best = getPotential(selfx, selfy, world, enemiesNear, myHPpct, self);
 		cout << "cur potential: " << best << endl;
 		point best_pt(selfx, selfy);
 
 		double pot_step = 30.0;
-		double search_rad = 10;
+		double search_rad = 5;
 		double pot;
 
 #ifdef _zuko3d_pc
@@ -1303,12 +1327,12 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		double ystart = selfy - pot_step * search_rad;
 		
 #endif
-		for (double y(selfy - pot_step * search_rad), y_end(selfy + pot_step * search_rad); y <= y_end; y += pot_step) {
-			for (double x(selfx - pot_step * search_rad), x_end(selfx + pot_step * search_rad); x <= x_end; x += pot_step) {
- 				pot = getPotential(x, y, world, enemiesNear, myHPpct);
+		for (double y(ystart), y_end(selfy + pot_step * search_rad); y <= y_end; y += pot_step) {
+			for (double x(xstart), x_end(selfx + pot_step * search_rad); x <= x_end; x += pot_step) {
+ 				pot = getPotential(x, y, world, enemiesNear, myHPpct, self);
 #ifdef _zuko3d_pc
-				int xi = (int) ((x - xstart) / pot_step);
-				int yi = (int) ((y - ystart) / pot_step);
+				int xi = (int) floor(0.5 + (x - xstart) / pot_step);
+				int yi = (int) floor(0.5 + (y - ystart) / pot_step);
 				//cout << "\t" << floor(pot * 10.0);
 				pre_bmp[xi + yi * wd] = pot;
 				
@@ -1337,7 +1361,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		for (auto&p : pre_bmp) {
 			if (mx < fabs(p)) mx = fabs(p);
 		}
-		mx = 254 / mx;
+		mx = 254 / log(mx + 1.0);
 		Colour clr;
 		clr.a = 255;
 		clr.r = 0;
@@ -1347,12 +1371,12 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		for(unsigned int i = 0; i < pre_bmp.size(); i++){
 			if (pre_bmp[i] < 0) {
 				//bmp[i * 3] = (BYTE)floor(-pre_bmp[i] * mx);
-				clr.r = (unsigned char) floor(-pre_bmp[i] * mx);
+				clr.r = (unsigned char) floor(log(-pre_bmp[i] + 1.0) * mx);
 				clr.g = 0;
 				bmp.setPixel(clr, i % wd, i / wd);
 			}
 			else {
-				clr.g = (unsigned char)floor(pre_bmp[i] * mx);
+				clr.g = (unsigned char)floor(log(pre_bmp[i] + 1.0) * mx);
 				clr.r = 0;
 				bmp.setPixel(clr, i % wd, i / wd);
 			}
@@ -1368,7 +1392,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		bmp.setPixel(clr, xi, yi);
 
 		bmp.WriteImage("potential.tga");
-		//system("pause");
+		system("pause");
 #endif
 	}
 #pragma endregion
@@ -1384,13 +1408,15 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 						point pt(w);
 						if (fabs(self.getAngleTo(pt)) < PI / 12.0) {
 							if (self.getDistanceTo(pt) < 500) {
-								double pts = 1000.0 / w.hp;
-								if (w.type == 3) pts += 20.0;
-								if (w.type == 4) pts += 50.0;
-								if (w.type == 5) pts += 60.0;
-								if (pts > best) {
-									aim = pt;
-									best = pts;
+								if (!checkCollisions(selfx, selfy, pt.x, pt.y, true, -25.0)) {
+									double pts = 1000.0 / w.hp;
+									if (w.type == 3) pts += 20.0;
+									if (w.type == 4) pts += 50.0;
+									if (w.type == 5) pts += 60.0;
+									if (pts > best) {
+										aim = pt;
+										best = pts;
+									}
 								}
 							}
 						}
@@ -1404,7 +1430,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 					}
 				}
 				else {
-					if (self.getRemainingCooldownTicksByAction()[ACTION_STAFF] < 1) move.setAction(ACTION_STAFF);
+					//if (self.getRemainingCooldownTicksByAction()[ACTION_STAFF] < 1) move.setAction(ACTION_STAFF);
 				}
 				double cd = (double) self.getRemainingCooldownTicksByAction()[ACTION_MAGIC_MISSILE];
 
@@ -1413,10 +1439,12 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 				for (auto&w : enemiesNear) {
 					point pt(w);
 					if (self.getDistanceTo(pt) < 530) {
-						double pts = (5.0 + max(0.0, self.getAngleTo(pt) / PI * 30.0 - cd)) / w.hp;
-						if (pts > best) {
-							aim = pt;
-							best = pts;
+						if (!checkCollisions(selfx, selfy, pt.x, pt.y, true, -25.0)) {
+							double pts = (5.0 + max(0.0, self.getAngleTo(pt) / PI * 30.0 - cd)) / w.hp;
+							if (pts > best) {
+								aim = pt;
+								best = pts;
+							}
 						}
 					}
 				}
