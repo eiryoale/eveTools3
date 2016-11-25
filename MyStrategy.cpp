@@ -745,7 +745,7 @@ list<point> findPathToZone(const point& start, const point& dest, const double r
 			open.pop();
 			cur = open.top();
 		}
-		if (sqr(cur.second.first * step - dest.x) + sqr(cur.second.second * step - dest.y) <= sqr(rad)) {
+		if (sqr(cur.second.first * step + start.x - dest.x) + sqr(cur.second.second * step + start.y - dest.y) <= sqr(rad)) {
 			good = true;
 			break;
 		}
@@ -808,17 +808,17 @@ list<point> findPathToZone(const point& start, const point& dest, const double r
 	}
 
 	if (!good) {
-		cout << "FAILED to find a path" << endl;
+		cout << "!!!!!!!!! FAILED to find a path" << endl;
 		return path;
 	}
 
-	/*
+	
 	if (cur_path_ticks > path_ticks) {
 		path_ticks = cur_path_ticks;
 	}
 
 	cout << "path_ticks = \t" << path_ticks << endl;
-	*/
+	
 
 	pt p_cur = cur.second;
 	double x = start.getX();
@@ -1122,14 +1122,14 @@ double getPotential(double x, double y, const World& world, const set<dcircle>& 
 			//мы хотим атаковать (стрел€ть)
 			enemiesAttackable.insert(sigmoid(dist, (500 + 10 - 38) + e.radius, damageDealCoef)); // 500 - дальность моей атаки, 10 - радиус снар€да, 38 - дополнительный радиус дин. объекта
 
-			//мы хотим бить руками
-			enemiesAttackable.insert(sigmoid(dist, 70 - 38 + e.radius, staffDamageDealCoef)); // 70 - дальность моей атаки
+			//мы пока не хотим бить руками
+			//enemiesAttackable.insert(sigmoid(dist, 70 - 38 + e.radius, staffDamageDealCoef)); // 70 - дальность моей атаки
 		}
 
 		if (e.cd < timeToCome) {
 			if (!checkCollisions(x, y, e.x, e.y, true, -25.0)) {
 				if (e.type != 3) {
-					enemiesAggroed.insert(sigmoid(dist, e.attackRange, damageTakeFromMinionCoef / (scareFactor + myHPpct)));
+					enemiesAggroed.insert(sigmoid(dist, e.attackRange + 10, damageTakeFromMinionCoef / (scareFactor + myHPpct)));
 				}
 				else {
 					enemiesAggroed.insert(sigmoid(dist, e.attackRange + 20.0, damageTakeFromWizardCoef / (scareFactor + myHPpct)));
@@ -1345,10 +1345,10 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		int wd = 2 * ((int)search_rad) + 1;
 		TGAImage bmp(wd,wd);
 		pre_bmp.resize(sqr(wd));
+#endif
+
 		double xstart = selfx - pot_step * search_rad;
 		double ystart = selfy - pot_step * search_rad;
-		
-#endif
 		for (double y(ystart), y_end(selfy + pot_step * search_rad); y <= y_end; y += pot_step) {
 			for (double x(xstart), x_end(selfx + pot_step * search_rad); x <= x_end; x += pot_step) {
  				pot = getPotential(x, y, world, enemiesNear, myHPpct, self);
@@ -1368,7 +1368,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		}
 		cout << "best: " << best << " \t coord: " << floor(best_pt.x) << " \t" << floor(best_pt.y) << endl;
 		
-		curWay = findPathToZone(point(selfx, selfy), best_pt, 10.0, 5.0, 1000);
+		curWay = findPathToZone(point(selfx, selfy), best_pt, pot_step / 2.0, 10.0, 10000);
 		if (!curWay.empty()) {
 			setMoveToPoint(self, move, curWay.front());
 		}
@@ -1481,8 +1481,9 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 	// ========================================================= Out-of-combat Movement ===================================================================================================================================================================
 	{
 		if (!inBattle) {
+			bool needToRecountPath = false;
 			if (!curWay.empty()) {
-				bool needToRecountPath = false;
+
 				auto dobjects = cellByXY(self.getX(), self.getY(), dynamicMap);
 				if (dobjects->size() > 0) {
 					bool tooClose = false;
@@ -1509,34 +1510,35 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 					needToRecountPath = true;
 					cout << "New tree spawned!" << endl;
 				}
-				if (needToRecountPath) {
-					auto ts = time();
-					static long long cumulative = 0;
-					if (cur_aim == PUSH) {
-						curWay = findPathToZone(point(self.getX(), self.getY()), destination, 400.0);
-					}
-					else {
-						curWay = findPath(point(self.getX(), self.getY()), destination);
-					}
-					cumulative += time() - ts;
-					cout << "time spent for path: " << (time() - ts) / 1000000 << " \t " << cumulative / 1000000 << endl;
-					cout << "next WP: " << curWay.front().x << " \t" << curWay.front().y << endl;
-
-#ifndef _DEBUG
-					//system("pause");
-#endif
-				}
-				if (!curWay.empty()) {
-					setMoveToPoint(self, move, curWay.front());
-
-					if (!inBattle) {
-						move.setTurn(self.getAngleTo(curWay.front()));
-					}
-				}
 			}
 			else {
-				curWay = findPath(point(selfx, selfy), destination);
+				needToRecountPath = true;
 			}
+			if (needToRecountPath) {
+				auto ts = time();
+				static long long cumulative = 0;
+				if (cur_aim == PUSH) {
+					curWay = findPathToZone(point(self.getX(), self.getY()), destination, 400.0);
+				}
+				else {
+					curWay = findPath(point(self.getX(), self.getY()), destination);
+				}
+				cumulative += time() - ts;
+				cout << "time spent for path: " << (time() - ts) / 1000000 << " \t " << cumulative / 1000000 << endl;
+				cout << "next WP: " << curWay.front().x << " \t" << curWay.front().y << endl;
+
+#ifndef _DEBUG
+				//system("pause");
+#endif
+			}
+			if (!curWay.empty()) {
+				setMoveToPoint(self, move, curWay.front());
+
+				if (!inBattle) {
+					move.setTurn(self.getAngleTo(curWay.front()));
+				}
+			}
+			
 		}
 	}
 
