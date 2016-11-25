@@ -97,7 +97,7 @@ void TGAImage::setPixel(Colour inputcolor, int x, int y) {
 
 //Convert 2d array indexing to 1d indexing
 int TGAImage::convert2dto1d(int x, int y) {
-	return m_width * y + x;
+	return m_width * (m_height - y) + x;
 }
 
 void TGAImage::WriteImage(string filename) {
