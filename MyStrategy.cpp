@@ -707,7 +707,7 @@ auto findPath(const point& start, const point& dest, double step = 20.0) {
 }
 */
 
-list<point> findPathToZone(const point& start, const point& dest, const double rad, double step = 20.0, int max_Ticks = 25000) {
+list<point> findPathToZone(const point& start, const point& dest, const double rad, double step = 20.0, int max_Ticks = 50000) {
 	typedef pair<int, int> pt;
 	typedef pair<double, pt > qtype;
 
@@ -817,7 +817,7 @@ list<point> findPathToZone(const point& start, const point& dest, const double r
 		path_ticks = cur_path_ticks;
 	}
 
-	cout << "path_ticks = \t" << path_ticks << endl;
+	cout << "path_ticks = \t" << path_ticks << "\t" << cur_path_ticks << endl;
 	
 
 	pt p_cur = cur.second;
@@ -1027,8 +1027,8 @@ point getTopFront(const World& world) {
 			double mx = m.getX();
 			double my = m.getY();
 			if (getUnitLane(mx, my) == TOP) {
-				mx += m.getVisionRange();
-				my -= m.getVisionRange();
+				mx += m.getVisionRange() / 4.0;
+				my -= m.getVisionRange() / 4.0;
 				if (mx > maxx) maxx = mx;
 				if (my < miny) miny = my;
 			}
@@ -1041,8 +1041,8 @@ point getTopFront(const World& world) {
 			double mx = m.getX();
 			double my = m.getY();
 			if (getUnitLane(mx, my) == TOP) {
-				mx += m.getVisionRange();
-				my -= m.getVisionRange();
+				mx += m.getVisionRange() / 4.0;
+				my -= m.getVisionRange() / 4.0;
 				if (mx > maxx) maxx = mx;
 				if (my < miny) miny = my;
 			}
@@ -1055,8 +1055,8 @@ point getTopFront(const World& world) {
 			double mx = m.getX();
 			double my = m.getY();
 			if (getUnitLane(mx, my) == TOP) {
-				mx += m.getVisionRange();
-				my -= m.getVisionRange();
+				mx += m.getVisionRange() / 4.0;
+				my -= m.getVisionRange() / 4.0;
 				if (mx > maxx) maxx = mx;
 				if (my < miny) miny = my;
 			}
@@ -1071,8 +1071,9 @@ inline double sigmoid(const double& x, const double& dx, const double& dy) {
 	return dy * (1.0 - (x - dx) / (1.0 + fabs(x - dx)));
 }
 
-inline double sigmoidStrict(const double& x, const double& dx, const double& dy) {
-	return dy * (1.0 - tanh(x - dx));
+
+inline double sigmoidStrict(const double& x, const double& dx, const double& dy) { // 0 ... 2
+	return dy * (1 - tanh(x - dx));
 }
 
 const double dyingXpCoef = 10.0;
@@ -1172,6 +1173,8 @@ long long cum_move_time = 0;
 int tick = 0;
 set<long long> treesSet;
 point destination(0,0), top_rune(1200, 1200), bot_rune(2800, 2800);
+int top_rune_cond = 1;
+int bot_rune_cond = 1;
 #define PUSH_TOP 1
 int cur_strategy = PUSH_TOP;
 
@@ -1180,7 +1183,7 @@ int cur_strategy = PUSH_TOP;
 int cur_aim = PUSH;
 
 const double nearTreshold = 650; 
-
+int prev_tick = 0;
 void MyStrategy::move(const Wizard& self, const World& world, const Game& game, Move& move) {
 	bool inBattle = false;
 	auto move_start_time = time();
@@ -1195,7 +1198,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 
 	vector<CircularUnit> enemiesNearCircular;
 	enemiesNearCircular.reserve(20);
-	
+	auto gtick = world.getTickIndex();
 	// ======================================================== Update Variables===================================================================================================================================================================
 	
 	bool newTrees = false;
@@ -1226,8 +1229,10 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		for (auto& b : buildings) {
 			staticObjects.insert(b);
 			if (b.getFaction() == enFaction) {
-				enemiesNearCircular.push_back(b);
-				enemiesNear.insert(b);
+				if (sqr(selfx - b.getX()) + sqr(selfy - b.getY()) < sqr(b.getRadius() + nearTreshold)) {
+					enemiesNearCircular.push_back(b);
+					enemiesNear.insert(b);
+				}
 			}
 		}
 		int sizeWas = treesSet.size();
@@ -1313,8 +1318,36 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 	}
 
 #pragma endregion
+	// ========================================================= Rune ===================================================================================================================================================================
+#pragma region "Runes"
+	auto runes = world.getBonuses();
 
+	if (prev_tick % 2500 > game.getTickCount() % 2500) {
+		bot_rune_cond = top_rune_cond = 2;
+	}
 
+	bool seen_top_rune = false, seen_bot_rune = false;
+	for (auto& r : runes) {
+		if (r.getX() > 2000) {
+			seen_bot_rune = 2;
+		}
+		else {
+			seen_top_rune = 2;
+		}
+	}
+
+	for (auto&w : players) {
+		if (w.getFaction() == myFaction) {
+			if (w.getDistanceTo(top_rune) < w.getVisionRange()) {
+				if (!seen_top_rune) top_rune_cond = 0;
+			}
+
+			if (w.getDistanceTo(bot_rune) < w.getVisionRange()) {
+				if (!seen_bot_rune) bot_rune_cond = 0;
+			}
+		}
+	}
+#pragma endregion	
 	// ========================================================= Global Movement ===================================================================================================================================================================
 	if(!inBattle) {
 		//!!!!!!!!!!!!!!!! CHECK RUNE
@@ -1322,7 +1355,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		//assume we shouldn't go for the rune
 		if (cur_strategy == PUSH_TOP) {
 			destination = getTopFront(world);
-			cout << "DEST: " << floor(destination.x) << " \t" << destination.y << endl;
+			//cout << "DEST: " << floor(destination.x) << " \t" << destination.y << endl;
 		}
 	}
 
@@ -1356,8 +1389,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 				int xi = (int) floor(0.5 + (x - xstart) / pot_step);
 				int yi = (int) floor(0.5 + (y - ystart) / pot_step);
 				//cout << "\t" << floor(pot * 10.0);
-				pre_bmp[xi + yi * wd] = pot;
-				
+				pre_bmp[xi + yi * wd] = pot;		
 #endif
 				if (pot > best) {
 					best = pot;
@@ -1368,7 +1400,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		}
 		cout << "best: " << best << " \t coord: " << floor(best_pt.x) << " \t" << floor(best_pt.y) << endl;
 		
-		curWay = findPathToZone(point(selfx, selfy), best_pt, pot_step / 2.0, 10.0, 10000);
+		curWay = findPathToZone(point(selfx, selfy), best_pt, pot_step / 2.0, 10.0, 1000);
 		if (!curWay.empty()) {
 			setMoveToPoint(self, move, curWay.front());
 		}
@@ -1518,15 +1550,13 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 				auto ts = time();
 				static long long cumulative = 0;
 				if (cur_aim == PUSH) {
-					curWay = findPathToZone(point(self.getX(), self.getY()), destination, 400.0);
+					curWay = findPathToZone(point(self.getX(), self.getY()), destination, nearTreshold);
 				}
 				else {
 					curWay = findPath(point(self.getX(), self.getY()), destination);
 				}
 				cumulative += time() - ts;
-				cout << "time spent for path: " << (time() - ts) / 1000000 << " \t " << cumulative / 1000000 << endl;
-				cout << "next WP: " << curWay.front().x << " \t" << curWay.front().y << endl;
-
+				//cout << "time spent for path: " << (time() - ts) / 1000000 << " \t " << cumulative / 1000000 << endl;
 #ifndef _DEBUG
 				//system("pause");
 #endif
@@ -1543,6 +1573,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 	}
 
 	cum_move_time += time() - move_start_time;
+	prev_tick = world.getTickIndex();
 	//cout << tick << ":\t Time per tick(us): " << cum_move_time / tick / 1000 << endl;
 }
 
