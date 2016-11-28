@@ -147,6 +147,12 @@ using namespace std;
 
 model::Faction enFaction, myFaction;
 double maxSpeedX, maxSpeedY;
+double myAttackRange;
+
+#ifdef _zuko3d_output_path_stats
+#include <iostream>
+ofstream fout_path("path_stats.txt", ios_base::app);
+#endif
 
 long long time() {
 	return chrono::high_resolution_clock::now().time_since_epoch().count();
@@ -206,13 +212,15 @@ struct dcircle : circle {
 	double sightRange = 0.0;
 	int type;
 	double attackRange; // максимальное расстояние между центрами, при котором можно нанести урон
+	double angle;
 	double hpPct;
 	double hp;
 	double cd;
+	int faction;
 
 	dcircle() { }
 
-	dcircle(const LivingUnit& u, double additionalRadius = 38) : circle(u, additionalRadius), hpPct((double) u.getLife() / (double) u.getMaxLife()), hp((double) u.getLife()) { }
+	dcircle(const LivingUnit& u, double additionalRadius = 38) : circle(u, additionalRadius), hpPct((double) u.getLife() / (double) u.getMaxLife()), hp((double) u.getLife()), angle(u.getAngle()), faction(u.getFaction()) { }
 
 	dcircle(const Minion& u, double additionalRadius = 38) : dcircle((LivingUnit) u, additionalRadius) {
 		sightRange = u.getVisionRange();
@@ -227,7 +235,7 @@ struct dcircle : circle {
 	dcircle(const Wizard& u, double additionalRadius = 38) : dcircle((LivingUnit)u, additionalRadius) {
 		sightRange = u.getVisionRange();
 		type = 3;
-		attackRange = 510 + 35;
+		attackRange = 510 + 35; // !!!!!!!!!!!!!!!!!!!!!! дальность атаки увеличивается с уровнем!
 		cd = u.getRemainingCooldownTicksByAction()[ACTION_MAGIC_MISSILE];
 	}
 	dcircle(const Building& u, double additionalRadius = 38) : dcircle((LivingUnit)u, additionalRadius) {
@@ -247,6 +255,20 @@ struct dcircle : circle {
 
 	bool operator==(const dcircle& c) const {
 		return id == c.id;
+	}
+
+	double getAngleTo(const dcircle& c) const {
+		return getAngleTo(c.x, c.y);
+	}
+
+	double getAngleTo(double px, double py) const {
+		double dx = px - x;
+		double dy = py - y;
+		
+		double ret = atan2(dx, dy) - angle;
+		if (ret > PI) ret -= 2.0 * PI;
+
+		return ret;
 	}
 };
 
@@ -807,8 +829,40 @@ list<point> findPathToZone(const point& start, const point& dest, const double r
 		}
 	}
 
+	{
+		cout << "Dist: " << start.getDistanceTo(dest) << " (rad = " << rad << ") , ticks: \t" << cur_path_ticks << endl;
+#ifdef _zuko3d_output_path_stats
+		fout_path << start.getDistanceTo(dest) << " \t" << rad << " \t" << cur_path_ticks << endl;
+		fout_path.flush();
+#endif // _z
+	}
+
 	if (!good) {
 		cout << "!!!!!!!!! FAILED to find a path" << endl;
+
+#ifdef _zuko3d_pc
+		int minx = 4000, maxx = 0, miny = 4000, maxy = 0;
+		for (auto& p : openSet) {
+			if (minx > p.first) minx = p.first;
+			if (maxx < p.first) maxx = p.first;
+			if (miny > p.second) miny = p.second;
+			if (maxy < p.second) maxy = p.second;
+		}
+
+		for (auto& p : closed) {
+			if (minx > p.first) minx = p.first;
+			if (maxx < p.first) maxx = p.first;
+			if (miny > p.second) miny = p.second;
+			if (maxy < p.second) maxy = p.second;
+		}
+
+
+		TGAImage path_pic;
+
+		//path_pic.WriteImage("path.tga");
+
+		//system("pause");
+#endif
 		return path;
 	}
 
@@ -1067,7 +1121,7 @@ point getTopFront(const World& world) {
 	return point(200, miny);
 }
 
-inline double sigmoid(const double& x, const double& dx, const double& dy) {
+inline double sigmoid(const double& x, const double& dx, const double& dy) { // 0 ... 2
 	return dy * (1.0 - (x - dx) / (1.0 + fabs(x - dx)));
 }
 
@@ -1084,23 +1138,26 @@ const double damageTakeFromWizardCoef = 1.5;
 const double scareFactor = 0.03;
 const double obstacleCoef = 20.0;
 const double projectileCoef = 20.0;
+const double catchFearCoef = 0.02;
 
 vector<double> attackRangeByType = { 0, 305, 50, 565, 765 };
 
 double getPotential(double x, double y, const World& world, const set<dcircle>& enemiesNear, double myHPpct, const Wizard& self) {
 	double positive = 0;
 	double negative = 0;
+	double cought = 0.0;
 
 	auto cd = self.getRemainingCooldownTicksByAction()[ACTION_MAGIC_MISSILE];
 
-	if ((x < 0.0) || (x > 4000.0)) return -1e10;
-	if ((y < 0.0) || (y > 4000.0)) return -1e10;
+	if ((x < 0.0) || (x > 4000.0)) return -10.0 * obstacleCoef;
+	if ((y < 0.0) || (y > 4000.0)) return -10.0 * obstacleCoef;
 
 	int xi = (int)floor(x / cellSize);
 	int yi = (int)floor(y / cellSize);
 
 	double obstacles = 0;
-	obstacles += sigmoidStrict(x, 0, obstacleCoef);
+	obstacles += sigmoidStrict(x, 35, obstacleCoef);
+	obstacles += sigmoid(x, 50, obstacleCoef);
 	obstacles += sigmoidStrict(y, 0, obstacleCoef);
 
 	for (auto& obj : staticMap[xi][yi]) {
@@ -1117,24 +1174,31 @@ double getPotential(double x, double y, const World& world, const set<dcircle>& 
 	
 	for (auto&e : enemiesNear) {
 		double dist = e.distanceTo(x,y);
+
 		positive += sigmoid(dist, 600, dyingXpCoef / (0.1 + floor(e.hp / 12.0))); //!!!!!!!!!!!!!! 600 - радиус полчения экспы. Возможно, нужно считать не расстояние между центрами, а расстояние от своего центра до любой точки умирающего
 		
-		if (cd < timeToCome) {
-			//мы хотим атаковать (стрелять)
-			enemiesAttackable.insert(sigmoid(dist, (500 + 10 - 38) + e.radius, damageDealCoef)); // 500 - дальность моей атаки, 10 - радиус снаряда, 38 - дополнительный радиус дин. объекта
+		cought += max(0.0, e.x + e.y - x - y) / (scareFactor + myHPpct); // !!!!!!!!! только для топ-линии! для остальных нужно свои формулы делать
 
-			//мы пока не хотим бить руками
+		if (cd <= timeToCome) {
+			//мы хотим атаковать (стрелять)
+			enemiesAttackable.insert(sigmoid(dist, myAttackRange - 38 + e.radius, damageDealCoef / (1.0 - sigmoid(e.hp, 20.0, 0.5)))); // 500 - дальность моей атаки, 10 - радиус снаряда, 38 - дополнительный радиус дин. объекта
+
+			//!!!!!!!!!!!!!!!!! мы пока не хотим бить руками
 			//enemiesAttackable.insert(sigmoid(dist, 70 - 38 + e.radius, staffDamageDealCoef)); // 70 - дальность моей атаки
 		}
 
-		if (e.cd < timeToCome) {
-			if (!checkCollisions(x, y, e.x, e.y, true, -25.0)) {
+		
+		if (!checkCollisions(x, y, e.x, e.y, true, -25.0)) {
+			double angleCoef = sigmoid(e.getAngleTo(x, y), PI / 12.0 * (1.0 + timeToCome * 0.4), 0.5);
+			if (angleCoef > 0.1) {
+				double tmp1 = e.attackRange - max(0.0, e.cd - 4 - timeToCome) * maxSpeedX + 5.0 + timeToCome * 1.5; // добавочное расстояние за счёт того, что к нам могут подойдти
 				if (e.type != 3) {
-					enemiesAggroed.insert(sigmoid(dist, e.attackRange + 10, damageTakeFromMinionCoef / (scareFactor + myHPpct)));
+					//!!!!!!!!!!!!!!!!!!! можно предсказывать, кого моб будет бить
+					enemiesAggroed.insert(sigmoid(dist, tmp1, angleCoef * damageTakeFromMinionCoef / (scareFactor + myHPpct)));
 				}
 				else {
-					enemiesAggroed.insert(sigmoid(dist, e.attackRange + 20.0, damageTakeFromWizardCoef / (scareFactor + myHPpct)));
-					enemiesAggroed.insert(sigmoid(dist, 105.0, damageTakeFromWizardCoef / (scareFactor + myHPpct)));
+					enemiesAggroed.insert(sigmoid(dist, tmp1, angleCoef * damageTakeFromWizardCoef / (scareFactor + myHPpct)));
+					enemiesAggroed.insert(sigmoid(dist, 105.0, angleCoef * damageTakeFromWizardCoef / (scareFactor + myHPpct)));
 				}
 			}
 		}
@@ -1166,7 +1230,7 @@ double getPotential(double x, double y, const World& world, const set<dcircle>& 
 		}
 	}
 	*/
-	return positive - negative - obstacles;
+	return positive - negative - obstacles - cought * catchFearCoef;
 }
 
 long long cum_move_time = 0;
@@ -1217,6 +1281,8 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 	maxSpeedX = maxMSX(self); // !!!!!!!!!!!!!!!!!!! НУЖНО УЧИТЫВАТЬ БАФФЫ на скорость
 	maxSpeedY = maxMSY(self); // !!!!!!!!!!!!!!!!!!! НУЖНО УЧИТЫВАТЬ БАФФЫ на скорость
 
+	myAttackRange = 500 + 10 - 1; // !!!!!!!!! учитывать скиллы и ауры на дальность!
+
 	// ========================================================= Prepare map ===================================================================================================================================================================
 	{
 		for (auto &row : dynamicMap) {
@@ -1249,7 +1315,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 			}
 			dynamicObjects.insert(d);
 
-			if (m.getFaction() == enFaction) {
+			if (m.getFaction() != myFaction) {
 				enemies.insert(d);
 				if (sqr(selfx - d.x) + sqr(selfy - d.y) < sqr(d.radius - 30 + nearTreshold)) {
 					enemiesNear.insert(d);
@@ -1313,8 +1379,11 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 	// ========================================================= Combat? ===================================================================================================================================================================
 #pragma region "Combat"
 	inBattle = false;
-	if (enemiesNear.size() > 0) {
-		inBattle = true;
+	for (auto& e : enemiesNear) { 
+		if (e.faction == enFaction) {// !!!!!!!!!!!!!!! нужно ещё проверять нейтралов, которые зааггрились
+			inBattle = true;
+			break;
+		}
 	}
 
 #pragma endregion
@@ -1384,10 +1453,12 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		double ystart = selfy - pot_step * search_rad;
 		for (double y(ystart), y_end(selfy + pot_step * search_rad); y <= y_end; y += pot_step) {
 			for (double x(xstart), x_end(selfx + pot_step * search_rad); x <= x_end; x += pot_step) {
+#ifdef _zuko3d_pc
+				int xi = (int)floor(0.5 + (x - xstart) / pot_step);
+				int yi = (int)floor(0.5 + (y - ystart) / pot_step);
+#endif
  				pot = getPotential(x, y, world, enemiesNear, myHPpct, self);
 #ifdef _zuko3d_pc
-				int xi = (int) floor(0.5 + (x - xstart) / pot_step);
-				int yi = (int) floor(0.5 + (y - ystart) / pot_step);
 				//cout << "\t" << floor(pot * 10.0);
 				pre_bmp[xi + yi * wd] = pot;		
 #endif
@@ -1456,12 +1527,12 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		if (inBattle) {
 			if (!self.getRemainingActionCooldownTicks()) {
 				if (self.getRemainingCooldownTicksByAction()[ACTION_MAGIC_MISSILE] < 1) {
-					point aim(0,0);
+					point aim(0, 0);
 					double best = 0.0;
 					for (auto&w : enemiesNear) {
 						point pt(w);
 						if (fabs(self.getAngleTo(pt)) < PI / 12.0) {
-							if (self.getDistanceTo(pt) < 500) {
+							if (self.getDistanceTo(pt) < myAttackRange + w.radius - 28) { // 38 - доп. радиус, -10 чтобы было тяжелее увернуться
 								if (!checkCollisions(selfx, selfy, pt.x, pt.y, true, -25.0)) {
 									double pts = 1000.0 / w.hp;
 									if (w.type == 3) pts += 20.0;
@@ -1486,27 +1557,29 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 				else {
 					//if (self.getRemainingCooldownTicksByAction()[ACTION_STAFF] < 1) move.setAction(ACTION_STAFF);
 				}
-				double cd = (double) self.getRemainingCooldownTicksByAction()[ACTION_MAGIC_MISSILE];
+			}
+			
+			double cd = max((double) self.getRemainingActionCooldownTicks(), (double)self.getRemainingCooldownTicksByAction()[ACTION_MAGIC_MISSILE]);
 
-				point aim(0,0);
-				double best = 0;
-				for (auto&w : enemiesNear) {
-					point pt(w);
-					if (self.getDistanceTo(pt) < 530) {
-						if (!checkCollisions(selfx, selfy, pt.x, pt.y, true, -25.0)) {
-							double pts = (5.0 + max(0.0, self.getAngleTo(pt) / PI * 30.0 - cd)) / w.hp;
-							if (pts > best) {
-								aim = pt;
-								best = pts;
-							}
+			point aim(0, 0);
+			double best = 0;
+			for (auto&w : enemiesNear) {
+				point pt(w);
+				if (self.getDistanceTo(pt) < 530) {
+					if (!checkCollisions(selfx, selfy, pt.x, pt.y, true, -25.0)) {
+						double pts = (5.0 + max(0.0, self.getAngleTo(pt) / PI * 30.0 - cd)) / w.hp;
+						if (pts > best) {
+							aim = pt;
+							best = pts;
 						}
 					}
 				}
-
-				if (best > 0) {
-					move.setTurn(self.getAngleTo(aim));
-				}
 			}
+
+			if (best > 0) {
+				move.setTurn(self.getAngleTo(aim));
+			}
+			
 		}
 	}
 
@@ -1594,3 +1667,9 @@ MyStrategy::MyStrategy() {
 		}
 	}
 }
+
+#ifdef _zuko3d_output_path_stats
+MyStrategy::~MyStrategy() {
+	fout_path.close();
+}
+#endif // 
