@@ -148,6 +148,7 @@ using namespace std;
 model::Faction enFaction, myFaction;
 double maxSpeedX, maxSpeedY;
 double myAttackRange;
+vector<model::Bonus> runes;
 
 #ifdef _zuko3d_output_path_stats
 #include <iostream>
@@ -1200,8 +1201,10 @@ double getPotential(double x, double y, const World& world, const vector<dcircle
 		
 		cought += max(0.0, myRefugeDistance - e.refugeDistance) / (scareFactor + myHPpct); // !!!!!!!!! только для топ-линии! для остальных нужно свои формулы делать
 
-		//!!!!!!!!!!!!!!!!! мы пока не хотим бить руками
-		//enemiesAttackable.insert(sigmoid(dist, 70 - 38 + e.radius, staffDamageDealCoef)); // 70 - дальность моей атаки
+		double angleCoef = sigmoid(e.getAngleTo(x, y), PI / 12.0 * (1.0 + timeToCome * 0.4), 0.5);
+		//double myAngleCoef = sigmoid(e.getAngleTo(x, y), PI / 12.0 * (1.0 + timeToCome * 0.4), 0.5);
+		//хотим бить руками
+		enemiesAttackable.insert(sigmoid(dist, 70 - 38 - 5 + e.radius, staffDamageDealCoef * myHPpct)); // !!!!!!!!!!!!!!!!!! не учитываем угол для удара!
 
 		if (!checkCollisions(x, y, e.x, e.y, true, -25.0)) {
 			if (cd <= timeToCome) {
@@ -1209,7 +1212,6 @@ double getPotential(double x, double y, const World& world, const vector<dcircle
 				enemiesAttackable.insert(sigmoid(dist, myAttackRange - 38 + e.radius, damageDealCoef / (1.0 - sigmoid(e.hp, 20.0, 0.5)))); // 500 - дальность моей атаки, 10 - радиус снаряда, 38 - дополнительный радиус дин. объекта
 			}
 
-			double angleCoef = sigmoid(e.getAngleTo(x, y), PI / 12.0 * (1.0 + timeToCome * 0.4), 0.5);
 			if (angleCoef > 0.1) {
 				double tmp1 = e.attackRange - max(0.0, e.cd - 4) * maxSpeedX + 5.0 + timeToCome * 1.5; // добавочное расстояние за счёт того, что к нам могут подойдти
 				if (e.type != 3) {
@@ -1250,6 +1252,16 @@ double getPotential(double x, double y, const World& world, const vector<dcircle
 		}
 	}
 	*/
+
+	for (auto&r : runes) {
+		double dist = sqrt(sqr(x - r.getX()) + (y - r.getY()));
+		positive += sigmoid(dist, 54, 30.0);
+		positive += sigmoid(dist, 200, 20.0);
+		positive += sigmoid(dist, 350, 10.0);
+		positive += sigmoid(dist, 500, 5.0);
+		positive += sigmoid(dist, 650, 5.0);
+	}
+
 	return positive - negative - obstacles - cought * catchFearCoef;
 }
 
@@ -1432,7 +1444,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 #pragma endregion
 	// ========================================================= Rune ===================================================================================================================================================================
 #pragma region "Runes"
-	auto runes = world.getBonuses();
+	runes = world.getBonuses();
 
 	if (prev_tick % 2500 > game.getTickCount() % 2500) {
 		bot_rune_cond = top_rune_cond = 2;
@@ -1560,7 +1572,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		bmp.setPixel(clr, xi, yi);
 
 		bmp.WriteImage("potential.tga");
-		system("pause");
+		//system("pause");
 #endif
 	}
 #pragma endregion
@@ -1598,19 +1610,35 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 					}
 				}
 				else {
-					//if (self.getRemainingCooldownTicksByAction()[ACTION_STAFF] < 1) move.setAction(ACTION_STAFF);
+					if (self.getRemainingCooldownTicksByAction()[ACTION_STAFF] < 1) {
+						for (auto&e : enemiesNear) {
+							if (e.distanceTo((point)self) < 30 + e.radius) {
+								point pt(e);
+								if (self.getAngleTo(pt) <= PI / 12.0) {
+									move.setAction(ACTION_STAFF);
+									break;
+								}
+							}
+						}
+					}
 				}
 			}
 			
 			double cd = max((double) self.getRemainingActionCooldownTicks(), (double)self.getRemainingCooldownTicksByAction()[ACTION_MAGIC_MISSILE]);
+			double staff_cd = max((double)self.getRemainingActionCooldownTicks(), (double)self.getRemainingCooldownTicksByAction()[ACTION_STAFF]);
 
 			point aim(0, 0);
 			double best = 0;
 			for (auto&w : enemiesNear) {
 				point pt(w);
-				if (self.getDistanceTo(pt) < 530) {
+				double dist = self.getDistanceTo(pt);
+				if (dist < 530) {
 					if (!checkCollisions(selfx, selfy, pt.x, pt.y, true, -25.0)) {
 						double pts = (5.0 + max(0.0, self.getAngleTo(pt) / PI * 30.0 - cd)) / w.hp;
+						if (dist < 30 + w.radius) pts *= 1 + max(0.0, cd - staff_cd) / 3.0; // we can strike it with STAFF!
+						if (w.type == 3) pts += 20.0;
+						if (w.type == 4) pts += 150.0;
+						if (w.type == 5) pts += 260.0;
 						if (pts > best) {
 							aim = pt;
 							best = pts;
@@ -1718,7 +1746,7 @@ MyStrategy::MyStrategy() {
 	tmp.push_back(point(100, 3700));
 	tmp.push_back(point(200, 3100));
 	tmp.push_back(point(200, 1800));
-	tmp.push_back(point(300, 900));
+	tmp.push_back(point(200, 900));
 	tmp.push_back(point(750, 350));
 
 	refugePoints[TOP] = tmp;
