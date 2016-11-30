@@ -229,6 +229,9 @@ struct std::circle {
 	}
 };
 
+list<point> pathToBonus;
+double pathLenghtToBonus = 1e10;
+
 struct std::dcircle : circle {
 	double sightRange = 0.0;
 	int type;
@@ -534,10 +537,10 @@ bool checkCollisions(double ax, double ay, double bx, double by, bool treesOnly 
 		double y = -(A * sx + C) / B;
 		j = (int)floor(y / cellSize);
 		cells.insert(pt(i, j));
-		cells.insert(pt(i - 1, j));
+		if(i > 0) cells.insert(pt(i - 1, j));
 		i += di;
 		sx += dx;
-		if (i < 0) {
+		if (i < -1) {
 			cout << "ERROR i < 0!" << endl;
 		}
 		if (j < 0) {
@@ -554,13 +557,13 @@ bool checkCollisions(double ax, double ay, double bx, double by, bool treesOnly 
 		double x = -(B * sy + C) / A;
 		i = (int)floor(x / cellSize);
 		cells.insert(pt(i, j));
-		cells.insert(pt(i, j - 1));
+		if(j > 0) cells.insert(pt(i, j - 1));
 		j += dj;
 		sy += dy;
 		if (i < 0) {
 			cout << "ERROR i < 0!" << endl;
 		}
-		if (j < 0) {
+		if (j < -1) {
 			cout << "ERROR j < 0!" << endl;
 		}
 	}
@@ -756,7 +759,7 @@ auto findPath(const point& start, const point& dest, double step = 20.0) {
 }
 */
 
-list<point> findPathToZone(const point& start, const point& dest, const double rad, double step = 20.0, int max_Ticks = 50000) {
+list<point> findPathToZonePrecise(const point& start, const point& dest, double rad, double step = 20.0, int max_Ticks = 50000) {
 	typedef pair<int, int> pt;
 	typedef pair<double, pt > qtype;
 
@@ -922,6 +925,18 @@ list<point> findPathToZone(const point& start, const point& dest, const double r
 	}
 	smoothenPath(path);
 	return path;
+}
+
+list<point> findPathToZone(const point& start, const point& dest, double rad, double step = 20.0, int max_Ticks = 50000) {
+	list<point> ret;
+	ret.clear();
+
+	while (ret.empty()) {
+		ret = findPathToZonePrecise(start, dest, rad, step, max_Ticks);
+		rad = (rad + 5.0) * 2.0;
+	}
+
+	return ret;
 }
 
 list<point> findPath(const point& start, const point& dest, double step = 20.0) {
@@ -1268,14 +1283,31 @@ double getPotential(double x, double y, const World& world, const vector<dcircle
 	}
 
 	if(top_rune_cond > 0) { //!!!!!!!!!!!!!!!! для бот-руны тоже надо!
-		double dist = sqrt(sqr(x - top_rune.getX()) + sqr(y - top_rune.getY()));
+		//double dist = sqrt(sqr(x - top_rune.getX()) + sqr(y - top_rune.getY()));
 		//double dist = fabs(x - top_rune.getX()) + fabs(y - top_rune.getY());
-		if (fabs(x - y) < 210) {
-			positive += max(0.0, 1000.0 - dist) * 3.0;
-		}
+		double dist = sqrt(sqr(pathToBonus.front().x - x) + sqr(pathToBonus.front().y - y));
+		positive += max(0.0, 3000.0 - pathLenghtToBonus - dist ) * 3.0;
 	}
 
 	return positive - negative - obstacles - cought * catchFearCoef;
+}
+
+double pathLength(const list<point> & path, const Wizard& self) {
+	list<point>::const_iterator it, it_next, it_end;
+	double ret = self.getDistanceTo(path.front());
+
+	it = path.begin();
+	it_end = path.end();
+	it_next = it;
+	it_next++;
+
+	while (it_next != it_end) {
+		ret += it->getDistanceTo(*it_next);
+
+		it++;
+		it_next++;
+	}
+	return ret;
 }
 
 long long cum_move_time = 0;
@@ -1290,6 +1322,9 @@ int cur_aim = PUSH;
 
 const double nearTreshold = 650; 
 int prev_tick = 0;
+
+vector<model::SkillType> skillBuild;
+
 void MyStrategy::move(const Wizard& self, const World& world, const Game& game, Move& move) {
 	bool inBattle = false;
 	auto move_start_time = time();
@@ -1338,7 +1373,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		maxSpeedY *= 1.0 + game.getHastenedMovementBonusFactor();
 	}
 
-	myAttackRange = 500 + 10 - 40; // !!!!!!!!! учитывать скиллы и ауры на дальность! -40 чтобы реже уворачивались
+	myAttackRange = 500 + 10 - 30 + 25.0 * max(0.0, (double) self.getLevel() - 4.0); 
 
 	auto myLane = getUnitLane(selfx, selfy);
 	if (myLane == TOP) { // !!!!!!!!!! другие лэйны тоже надо учитывать
@@ -1367,6 +1402,9 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 			}
 		}
 	}
+
+	// ========================================================= Level up? ===================================================================================================================================================================
+	move.setSkillToLearn(skillBuild[self.getLevel()]);
 
 	// ========================================================= Prepare map ===================================================================================================================================================================
 	{
@@ -1480,7 +1518,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 	// ========================================================= Rune ===================================================================================================================================================================
 #pragma region "Runes"
 	runes = world.getBonuses();
-
+	
 	if (prev_tick % 2500 > world.getTickIndex() % 2500) {
 		bot_rune_cond = top_rune_cond = 2;
 	}
@@ -1506,19 +1544,26 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 			}
 		}
 	}
+
+	if (top_rune_cond > 0) {
+		if ((world.getTickIndex() % 10) == 0) {
+			pathToBonus = findPathToZone((point)self, top_rune, 200.0, 20.0, 5000);
+			pathLenghtToBonus = pathLength(pathToBonus, self);
+			cout << "pathLenghtToBonus = " << pathLenghtToBonus << endl;
+		}
+	}
+	else {
+		pathToBonus.clear();
+	}
 #pragma endregion	
 	// ========================================================= Global Movement ===================================================================================================================================================================
 	if(!inBattle) {
-		//!!!!!!!!!!!!!!!! CHECK RUNE
-
-		//assume we shouldn't go for the rune
 		if (top_rune_cond > 0) {
 			destination = top_rune;
 		}
 		else {
 			if (cur_strategy == PUSH_TOP) {
 				destination = getTopFront(world);
-				//cout << "DEST: " << floor(destination.x) << " \t" << destination.y << endl;
 			}
 		}
 	}
@@ -1566,7 +1611,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		}
 		cout << "best: " << best << " \t coord: " << floor(best_pt.x) << " \t" << floor(best_pt.y) << endl;
 		
-		curWay = findPathToZone(point(selfx, selfy), best_pt, pot_step, 10.0, 2000);
+		curWay = findPathToZone(point(selfx, selfy), best_pt, pot_step, 10.0, 3000);
 		if (!curWay.empty()) {
 			setMoveToPoint(self, move, curWay.front());
 			destination = curWay.front();
@@ -1801,6 +1846,24 @@ MyStrategy::MyStrategy() {
 	refugePoints[TOP] = tmp;
 
 	tmp.resize(0);
+	skillBuild.push_back(SKILL_MAGICAL_DAMAGE_BONUS_PASSIVE_1);
+	skillBuild.push_back(SKILL_MAGICAL_DAMAGE_BONUS_PASSIVE_1);
+	skillBuild.push_back(SKILL_MAGICAL_DAMAGE_BONUS_AURA_1);
+	skillBuild.push_back(SKILL_MAGICAL_DAMAGE_BONUS_PASSIVE_2);
+	skillBuild.push_back(SKILL_MAGICAL_DAMAGE_BONUS_AURA_2);
+	skillBuild.push_back(SKILL_RANGE_BONUS_PASSIVE_1);
+	skillBuild.push_back(SKILL_RANGE_BONUS_AURA_1);
+	skillBuild.push_back(SKILL_RANGE_BONUS_PASSIVE_2);
+	skillBuild.push_back(SKILL_RANGE_BONUS_AURA_2);
+	skillBuild.push_back(SKILL_ADVANCED_MAGIC_MISSILE);
+	skillBuild.push_back(SKILL_STAFF_DAMAGE_BONUS_PASSIVE_1);
+	skillBuild.push_back(SKILL_STAFF_DAMAGE_BONUS_AURA_1);
+	skillBuild.push_back(SKILL_STAFF_DAMAGE_BONUS_PASSIVE_2);
+	skillBuild.push_back(SKILL_STAFF_DAMAGE_BONUS_AURA_2);
+	skillBuild.push_back(SKILL_MOVEMENT_BONUS_FACTOR_PASSIVE_1);
+	skillBuild.push_back(SKILL_MOVEMENT_BONUS_FACTOR_AURA_1);
+	skillBuild.push_back(SKILL_MOVEMENT_BONUS_FACTOR_PASSIVE_2);
+	skillBuild.push_back(SKILL_MOVEMENT_BONUS_FACTOR_AURA_2);
 }
 
 #ifdef _zuko3d_output_path_stats
