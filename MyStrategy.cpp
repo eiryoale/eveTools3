@@ -1203,8 +1203,8 @@ double getPotential(double x, double y, const World& world, const vector<dcircle
 
 	auto cd = self.getRemainingCooldownTicksByAction()[ACTION_MAGIC_MISSILE];
 
-	if ((x < 0.0) || (x > 4000.0)) return -10.0 * obstacleCoef;
-	if ((y < 0.0) || (y > 4000.0)) return -10.0 * obstacleCoef;
+	if ((x < 0.0) || (x > 4000.0)) return -1e6;
+	if ((y < 0.0) || (y > 4000.0)) return -1e6;
 
 	int xi = (int)floor(x / cellSize);
 	int yi = (int)floor(y / cellSize);
@@ -1579,7 +1579,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		point best_pt(selfx, selfy);
 
 		double pot_step = 40.0;
-		double search_rad = 7;
+		double search_rad = 7.0;
 		double pot;
 
 #ifdef _zuko3d_pc
@@ -1814,7 +1814,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 
 	cum_move_time += time() - move_start_time;
 	prev_tick = world.getTickIndex();
-	//cout << prev_tick << ":\t Time per tick(us): " << cum_move_time / tick / 1000 << endl;
+	cout << prev_tick << ":\t Time per tick(us): " << cum_move_time / tick / 1000 << endl;
 }
 
 MyStrategy::MyStrategy() { 
