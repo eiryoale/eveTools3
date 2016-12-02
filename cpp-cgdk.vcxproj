@@ -119,6 +119,7 @@
     <ClCompile Include="csimplesocket\HTTPActiveSocket.cpp" />
     <ClCompile Include="csimplesocket\PassiveSocket.cpp" />
     <ClCompile Include="csimplesocket\SimpleSocket.cpp" />
+    <ClCompile Include="local-runner-ru-master\Debug.cpp" />
     <ClCompile Include="model\Bonus.cpp" />
     <ClCompile Include="model\Building.cpp" />
     <ClCompile Include="model\CircularUnit.cpp" />
@@ -147,6 +148,7 @@
     <ClInclude Include="csimplesocket\PassiveSocket.h" />
     <ClInclude Include="csimplesocket\SimpleSocket.h" />
     <ClInclude Include="csimplesocket\StatTimer.h" />
+    <ClInclude Include="local-runner-ru-master\Debug.h" />
     <ClInclude Include="model\ActionType.h" />
     <ClInclude Include="model\Bonus.h" />
     <ClInclude Include="model\BonusType.h" />

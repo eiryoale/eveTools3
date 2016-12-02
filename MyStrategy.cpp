@@ -1,4 +1,8 @@
 #include "MyStrategy.h"
+#ifdef _zuko3d_pc
+#include "local-runner-ru-master\Debug.h"
+Debug deb;
+#endif
 #include <functional>
 #define PI 3.14159265358979323846
 #define _USE_MATH_DEFINES
@@ -17,6 +21,8 @@
 #include <map>
 #include <stack>
 #include <list>
+#include <iostream>
+#include <sstream>
 
 #ifdef _zuko3d_pc
 //includes
@@ -150,11 +156,16 @@ double maxSpeedX, maxSpeedY;
 double myAttackRange;
 vector<model::Bonus> runes;
 vector<model::Projectile> projNear;
+double staff_cd;
+double am_cd;
+double fsb_cd;
+double frb_cd;
 
 #ifdef _zuko3d_output_path_stats
 #include <iostream>
 ofstream fout_path("path_stats.txt", ios_base::app);
 #endif
+template<class T> string toString(T n) { ostringstream ost; ost << n; ost.flush(); return ost.str(); }//NOTES:toString(
 
 long long time() {
 	return chrono::high_resolution_clock::now().time_since_epoch().count();
@@ -243,6 +254,7 @@ struct std::dcircle : circle {
 	int faction;
 	double refugeDistance = 0.0;
 	double predicted_x, predicted_y;
+	double attack_priority;
 
 	dcircle() { }
 
@@ -1185,9 +1197,9 @@ point destination(0, 0), top_rune(1200, 1200), bot_rune(2800, 2800);
 
 const double dyingXpCoef = 10.0;
 const double damageDealCoef = 2.0;
-const double staffDamageDealCoef = 7.5;
-const double damageTakeFromMinionCoef = 2.5;
-const double damageTakeFromWizardCoef = 1.5;
+const double staffDamageDealCoef = 10.0;
+const double damageTakeFromMinionCoef = 1.0;
+const double damageTakeFromWizardCoef = 3.5;
 const double scareFactor = 0.03;
 const double obstacleCoef = 500.0;
 const double projectileCoef = 20.0;
@@ -1200,14 +1212,14 @@ double getPotential(double x, double y, const World& world, const vector<dcircle
 	double positive = 0;
 	double negative = 0;
 	double cought = 0.0;
-
-	auto cd = self.getRemainingCooldownTicksByAction()[ACTION_MAGIC_MISSILE];
-
+	
 	if ((x < 0.0) || (x > 4000.0)) return -1e6;
 	if ((y < 0.0) || (y > 4000.0)) return -1e6;
 
 	int xi = (int)floor(x / cellSize);
 	int yi = (int)floor(y / cellSize);
+
+	double scared_pct = (scareFactor + myHPpct);
 
 	double obstacles = 0;
 	obstacles += sigmoidStrict(x, 35, obstacleCoef);
@@ -1239,16 +1251,16 @@ double getPotential(double x, double y, const World& world, const vector<dcircle
 		double angleCoef = sigmoid(fabs(e.getAngleTo(x, y)), PI / 12.0 * (1.0 + timeToCome * 0.4), 0.5);
 		//double myAngleCoef = sigmoid(fabs(e.getAngleTo(x, y)), PI / 12.0 * (1.0 + timeToCome * 0.4), 0.5);
 		//хотим бить руками
-		enemiesAttackable.insert(sigmoid(dist, 70 - 38 - 5 + e.radius, staffDamageDealCoef * myHPpct)); // !!!!!!!!!!!!!!!!!! не учитываем угол для удара!
+		if(staff_cd <= timeToCome) enemiesAttackable.insert(sigmoid(dist, 70 - 38 - 5 + e.radius, staffDamageDealCoef * myHPpct)); // !!!!!!!!!!!!!!!!!! не учитываем угол для удара!
 
 		if (!checkCollisions(x, y, e.x, e.y, true, -25.0)) {
-			if (cd <= timeToCome) {
+			if (am_cd <= timeToCome) {
 				//мы хотим атаковать (стрелять)
-				enemiesAttackable.insert(sigmoid(predicted_dist, myAttackRange - 51 + e.radius, damageDealCoef / (1.0 - sigmoid(e.hp, 20.0, 0.5)))); // 500 - дальность моей атаки, 10 - радиус снаряда, 38 - дополнительный радиус дин. объекта
+				enemiesAttackable.insert(sigmoid(predicted_dist, myAttackRange + e.radius, damageDealCoef / (1.0 - sigmoid(e.hp, 20.0, 0.5)))); // 500 - дальность моей атаки, 10 - радиус снаряда, 38 - дополнительный радиус дин. объекта
 			}
 
 			if (angleCoef > 0.1) {
-				double tmp1 = e.attackRange - max(0.0, e.cd - 4.0 / myHPpct) * maxSpeedX + 5.0 / myHPpct + timeToCome; // добавочное расстояние за счёт того, что к нам могут подойдти
+				double tmp1 = e.attackRange - max(0.0, e.cd - timeToCome) * maxSpeedX + 5.0 + timeToCome; // добавочное расстояние за счёт того, что к нам могут подойдти
 				if (e.type != 3) {
 					//!!!!!!!!!!!!!!!!!!! можно предсказывать, кого моб будет бить
 					enemiesAggroed.insert(sigmoid(dist, tmp1, angleCoef * damageTakeFromMinionCoef / (scareFactor + myHPpct)));
@@ -1289,7 +1301,7 @@ double getPotential(double x, double y, const World& world, const vector<dcircle
 		positive += max(0.0, 3000.0 - pathLenghtToBonus - dist ) * 3.0;
 	}
 
-	return positive - negative - obstacles - cought * catchFearCoef;
+	return positive - negative / scared_pct - obstacles - cought * catchFearCoef;
 }
 
 double pathLength(const list<point> & path, const Wizard& self) {
@@ -1342,6 +1354,10 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 	vector<CircularUnit> enemiesNearCircular;
 	enemiesNearCircular.reserve(20);
 	auto gtick = world.getTickIndex();
+	
+#ifdef _zuko3d_pc
+	deb.beginPost();
+#endif
 	// ======================================================== Update Variables===================================================================================================================================================================
 	
 	bool newTrees = false;
@@ -1373,7 +1389,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		maxSpeedY *= 1.0 + game.getHastenedMovementBonusFactor();
 	}
 
-	myAttackRange = 500 + 10 - 30 + 25.0 * max(0.0, (double) self.getLevel() - 4.0); 
+	myAttackRange = 500 + 10 - 60 + 25.0 * max(0.0, (double) self.getLevel() - 4.0); // -60 чтобы легче попадать
 
 	auto myLane = getUnitLane(selfx, selfy);
 	if (myLane == TOP) { // !!!!!!!!!! другие лэйны тоже надо учитывать
@@ -1402,6 +1418,13 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 			}
 		}
 	}
+
+	double action_cd = (double) self.getRemainingActionCooldownTicks();
+	auto& CDs = self.getRemainingCooldownTicksByAction();
+	staff_cd = max((double)CDs[ACTION_STAFF], action_cd);
+	am_cd = max((double)CDs[ACTION_MAGIC_MISSILE], action_cd);
+	fsb_cd = max((double)CDs[ACTION_FROST_BOLT], action_cd);
+	frb_cd = max((double)CDs[ACTION_FIREBALL], action_cd);
 
 	// ========================================================= Level up? ===================================================================================================================================================================
 	move.setSkillToLearn(skillBuild[self.getLevel()]);
@@ -1594,6 +1617,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		for (double y(ystart), y_end(selfy + pot_step * search_rad); y <= y_end; y += pot_step) {
 			for (double x(xstart), x_end(selfx + pot_step * search_rad); x <= x_end; x += pot_step) {
 #ifdef _zuko3d_pc
+				
 				int xi = (int)floor(0.5 + (x - xstart) / pot_step);
 				int yi = (int)floor(0.5 + (y - ystart) / pot_step);
 #endif
@@ -1641,11 +1665,13 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 				clr.r = (unsigned char) floor(log(-pre_bmp[i] + 1.0) * mx);
 				clr.g = 0;
 				bmp.setPixel(clr, i % wd, i / wd);
+				deb.fillCircle(xstart + pot_step *((double) (i % wd)), ystart + pot_step *((double)(i / wd)), 10, clr.r << 16);
 			}
 			else {
 				clr.g = (unsigned char)floor(log(pre_bmp[i] + 1.0) * mx);
 				clr.r = 0;
 				bmp.setPixel(clr, i % wd, i / wd);
+				deb.fillCircle(xstart + pot_step *((double)(i % wd)), ystart + pot_step *((double)(i / wd)), 10, clr.g << 8);
 			}
 		}
 		int xi = (int)((best_pt.x - xstart) / pot_step);
@@ -1659,13 +1685,19 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		bmp.setPixel(clr, xi, yi);
 
 		bmp.WriteImage("potential.tga");
-		//system("pause");
+		deb.endPost();
+
+		system("pause");
 #endif
 	}
 #pragma endregion
 
 	// ========================================================= Attack ===================================================================================================================================================================
 	{
+#ifdef _zuko3d_pc
+		deb.arc(selfx,selfy, 70, self.getAngle() + PI / 12.0, -PI / 6.0, 0);
+		deb.circle(selfx, selfy, 600, 255);
+#endif
 		if (inBattle) {
 			if (!self.getRemainingActionCooldownTicks()) {
 				if (self.getRemainingCooldownTicksByAction()[ACTION_MAGIC_MISSILE] < 1) {
@@ -1674,7 +1706,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 					for (auto&w : enemiesNear) {
 						point pt(w.predicted_x, w.predicted_y);
 						if (fabs(self.getAngleTo(pt)) < PI / 12.0) {
-							if (self.getDistanceTo(pt) < myAttackRange + w.radius - 50) { // 38 - доп. радиус, -12 чтобы было тяжелее увернуться
+							if (self.getDistanceTo(pt) < myAttackRange + w.radius) { // 38 - доп. радиус, -12 чтобы было тяжелее увернуться
 								if (!checkCollisions(selfx, selfy, pt.x, pt.y, true, -25.0)) {
 									double pts = 1000.0 / w.hp;
 									if (w.type == 3) pts += 10.0;
@@ -1693,7 +1725,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 						move.setAction(ACTION_MAGIC_MISSILE);
 						move.setCastAngle(self.getAngleTo(aim));
 						move.setMinCastDistance(self.getDistanceTo(aim) - 8 - 30);
-						move.setMaxCastDistance(550);
+						move.setMaxCastDistance(650);
 					}
 				}
 				else {
@@ -1711,10 +1743,6 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 				}
 			}
 			
-			double cd = max((double) self.getRemainingActionCooldownTicks(), (double)self.getRemainingCooldownTicksByAction()[ACTION_MAGIC_MISSILE]);
-			double staff_cd = max((double)self.getRemainingActionCooldownTicks(), (double)self.getRemainingCooldownTicksByAction()[ACTION_STAFF]);
-			double all_cd = min(staff_cd, cd);
-
 			point aim(0, 0);
 			double best = 0;
 			for (auto&w : enemiesNear) {
@@ -1722,8 +1750,8 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 				double dist = self.getDistanceTo(pt);
 				if (dist < 540) {
 					if (!checkCollisions(selfx, selfy, pt.x, pt.y, true, -25.0)) {
-						double pts = (5.0 + max(0.0, self.getAngleTo(pt) / PI * 30.0 - cd)) / w.hp;
-						if (dist < 30 + w.radius) pts *= 1.5 + max(0.0, cd - staff_cd) / 3.0; // we can strike it with STAFF!
+						double pts = (5.0 + max(0.0, self.getAngleTo(pt) / PI * 30.0 - am_cd)) / w.hp;
+						if (dist < 30 + w.radius) pts *= 1.5 + max(0.0, am_cd - staff_cd) / 3.0; // we can strike it with STAFF!
 						if (w.type == 3) pts += 10.0;
 						if (w.type == 4) pts += 15.0;
 						if (w.type == 5) pts += 20.0;
@@ -1737,7 +1765,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 
 			if (best > 0) {
 				double aim_angle = self.getAngleTo(aim);
-				if (fabs(aim_angle / PI * 12.0) < all_cd) {
+				if (fabs(aim_angle / PI * 12.0) < action_cd) {
 					move.setTurn(self.getAngleTo(destination));
 				}
 				else {
@@ -1814,7 +1842,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 
 	cum_move_time += time() - move_start_time;
 	prev_tick = world.getTickIndex();
-	cout << prev_tick << ":\t Time per tick(us): " << cum_move_time / tick / 1000 << endl;
+	//cout << prev_tick << ":\t Time per tick(us): " << cum_move_time / tick / 1000 << endl;
 }
 
 MyStrategy::MyStrategy() { 

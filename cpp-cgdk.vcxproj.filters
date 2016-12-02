@@ -99,6 +99,9 @@
     <ClCompile Include="csimplesocket\SimpleSocket.cpp">
       <Filter>Source Files\csimplesocket</Filter>
     </ClCompile>
+    <ClCompile Include="local-runner-ru-master\Debug.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="MyStrategy.h">
@@ -205,6 +208,9 @@
     </ClInclude>
     <ClInclude Include="model\World.h">
       <Filter>Header Files\model</Filter>
+    </ClInclude>
+    <ClInclude Include="local-runner-ru-master\Debug.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>
