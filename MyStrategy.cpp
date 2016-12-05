@@ -154,12 +154,17 @@ using namespace std;
 model::Faction enFaction, myFaction;
 double maxSpeedX, maxSpeedY;
 double myAttackRange;
+double myAMdamage;
 vector<model::Bonus> runes;
 vector<model::Projectile> projNear;
 double staff_cd;
 double am_cd;
 double fsb_cd;
 double frb_cd;
+
+int path_generated = -1000;
+
+double fast_sqrt[] = { 0.0, 1.0, sqrt(2.0), sqrt(3.0) };
 
 #ifdef _zuko3d_output_path_stats
 #include <iostream>
@@ -420,6 +425,11 @@ template <class circle_class> bool checkCollisionsShort(double ax, double ay, do
 	typedef pair<int, int> pt;
 	set<pt> cells;
 	
+	if ((ax < 35) || (ax > 3965)) return true;
+	if ((ay < 35) || (ay > 3965)) return true;
+	if ((bx < 35) || (bx > 3965)) return true;
+	if ((by < 35) || (by > 3965)) return true;
+
 	pt a_pt((int)floor(ax / cellSize), (int)floor(ay / cellSize));
 	pt b_pt((int)floor(bx / cellSize), (int)floor(by / cellSize));
 	if ((a_pt.first >= 0) && (a_pt.first < objects.size())) {
@@ -476,9 +486,18 @@ template <class circle_class> bool checkCollisionsShort(double ax, double ay, do
 	return false;
 }
 
+bool checkCollisionsShort(double ax, double ay, double bx, double by) {
+	if (!checkCollisionsShort(ax, ay, bx, by, dynamicMap)) {
+		return checkCollisionsShort(ax, ay, bx, by, staticMap);
+	}
+	else {
+		return true;
+	}
+}
+
 template <class circle_class> bool checkCollisions(double ax, double ay, const vector< vector< vector<circle_class> > >& objects) {
-	if ((ax < 0.0) || (ax > 4000.0)) return false;
-	if ((ay < 0.0) || (ay > 4000.0)) return false;
+	if ((ax < 35.0) || (ax > 3965.0)) return true;
+	if ((ay < 35.0) || (ay > 3965.0)) return true;
 	
 	int xi = (int)floor(ax / cellSize);
 	int yi = (int)floor(ay / cellSize);
@@ -491,8 +510,8 @@ template <class circle_class> bool checkCollisions(double ax, double ay, const v
 }
 
 bool checkCollisions(double ax, double ay, double d_rad = 0.0) {
-	if ((ax < 0.0) || (ax > 4000.0)) return false;
-	if ((ay < 0.0) || (ay > 4000.0)) return false;
+	if ((ax < 35.0) || (ax > 3965.0)) return true;
+	if ((ay < 35.0) || (ay > 3965.0)) return true;
 
 	int xi = (int)floor(ax / cellSize);
 	int yi = (int)floor(ay / cellSize);
@@ -602,6 +621,13 @@ bool checkCollisions(const point& a, const point &b) {
 }
 
 void smoothenPath(list<point>& path) {
+	if (path.size() < 3) {
+		if (path.size() > 0) {
+			path.pop_front();
+		}
+		return;
+	}
+
 	list<point>::iterator itl, itr, it_end;
 	itl = path.begin();
 
@@ -1036,25 +1062,25 @@ template <class circle_class> void addObjectsToMap(vector< vector< vector< circl
 		if (top && left) {
 			double x = i * map_width;
 			double y = j * map_height;
-			if (i > 0) if (j > 0) if (sqr(x - c.x) + sqr(y - c.y) < c.radius) mp[i - 1][j - 1].push_back(c);
+			if (i > 0) if (j > 0) if (sqr(x - c.x) + sqr(y - c.y) < sqr(c.radius)) mp[i - 1][j - 1].push_back(c);
 		}
 
 		if (top && right) {
 			double x = (i + 1) * map_width;
 			double y = j * map_height;
-			if (j > 0) if (sqr(x - c.x) + sqr(y - c.y) < c.radius) mp[i + 1][j - 1].push_back(c);
+			if (j > 0) if (sqr(x - c.x) + sqr(y - c.y) < sqr(c.radius)) mp[i + 1][j - 1].push_back(c);
 		}
 
 		if (bot && left) {
 			double x = i * map_width;
 			double y = (j + 1) * map_height;
-			if (i > 0) if (sqr(x - c.x) + sqr(y - c.y) < c.radius) mp[i - 1][j + 1].push_back(c);
+			if (i > 0) if (sqr(x - c.x) + sqr(y - c.y) < sqr(c.radius)) mp[i - 1][j + 1].push_back(c);
 		}
 
 		if (bot && right) {
 			double x = (i + 1) * map_width;
 			double y = (j + 1) * map_height;
-			if (sqr(x - c.x) + sqr(y - c.y) < c.radius) mp[i + 1][j + 1].push_back(c);
+			if (sqr(x - c.x) + sqr(y - c.y) < sqr(c.radius)) mp[i + 1][j + 1].push_back(c);
 		}
 
 	}
@@ -1132,7 +1158,7 @@ int getUnitLane(double x, double y) {
 	return OTHER;
 }
 
-point getTopFront(const World& world) {
+point getTopFront(const World& world) { //!!!!!!!!!!!!! надо рассчитывать исходя из врагов тоже
 	double maxx = 0, miny = 4000.0;
 
 	auto& minions = world.getMinions();
@@ -1177,7 +1203,7 @@ point getTopFront(const World& world) {
 		}
 	}
 
-	if (miny < 200) return point(maxx, 200);
+	if (miny < 400) return point(maxx, 200);
 	return point(200, miny);
 }
 
@@ -1197,18 +1223,18 @@ point destination(0, 0), top_rune(1200, 1200), bot_rune(2800, 2800);
 
 const double dyingXpCoef = 10.0;
 const double damageDealCoef = 2.0;
-const double staffDamageDealCoef = 10.0;
-const double damageTakeFromMinionCoef = 1.0;
+const double staffDamageDealCoef = 15.0;
+const double damageTakeFromMinionCoef = 0.3;
 const double damageTakeFromWizardCoef = 3.5;
 const double scareFactor = 0.03;
 const double obstacleCoef = 500.0;
 const double projectileCoef = 20.0;
-const double catchFearCoef = 0.01;
+const double catchFearCoef = 0.005;
 
 
 vector<double> attackRangeByType = { 0, 305, 50, 565, 765 };
 
-double getPotential(double x, double y, const World& world, const vector<dcircle>& enemiesNear, double myHPpct, const Wizard& self) {
+double getPotential(double x, double y, const World& world, const vector<dcircle>& enemiesNear, double myHPpct, const Wizard& self, double distFromStart) {
 	double positive = 0;
 	double negative = 0;
 	double cought = 0.0;
@@ -1222,13 +1248,14 @@ double getPotential(double x, double y, const World& world, const vector<dcircle
 	double scared_pct = (scareFactor + myHPpct);
 
 	double obstacles = 0;
+	/*
 	obstacles += sigmoidStrict(x, 35, obstacleCoef);
-	obstacles += sigmoid(x, 0, obstacleCoef);
 	obstacles += sigmoidStrict(y, 0, obstacleCoef);
 
 	for (auto& obj : staticMap[xi][yi]) {
 		obstacles += sigmoidStrict(obj.distanceTo(x, y), obj.radius, obstacleCoef);
 	}
+	*/
 
 	for (auto& obj : dynamicMap[xi][yi]) {
 		obstacles += sigmoidStrict(obj.distanceTo(x, y), obj.radius, obstacleCoef);
@@ -1236,27 +1263,27 @@ double getPotential(double x, double y, const World& world, const vector<dcircle
 
 	set<double, std::greater<double> > enemiesAttackable, enemiesAggroed;
 
-	double timeToCome = ceil(sqrt(sqr(x - self.getX()) + sqr(y - self.getY())) / maxSpeedX);
-	double myRefugeDistance = refugePoint.getDistanceTo(x, y) + 50.0 / sqr(myHPpct);
+	double timeToCome = ceil(distFromStart / maxSpeedX);
+	double myRefugeDistance = refugePoint.getDistanceTo(x, y) + 20.0 / sqr(myHPpct);
 
 	for (auto&e : enemiesNear) {
 		double dist = e.distanceTo(x,y);
 		double predicted_dist = sqrt(sqr(e.predicted_x - x) + sqr(e.predicted_y - y));
 
-		positive += sigmoid(dist, 600, dyingXpCoef / (0.3 + floor(e.hp / 12.0))); //!!!!!!!!!!!!!! 600 - радиус полчения экспы. Возможно, нужно считать не расстояние между центрами, а расстояние от своего центра до любой точки умирающего
+		positive += sigmoid(predicted_dist, 590, dyingXpCoef / exp(floor(e.hp / myAMdamage))); //!!!!!!!!!!!!!! 600 - радиус полчения экспы. Возможно, нужно считать не расстояние между центрами, а расстояние от своего центра до любой точки умирающего
 		
 		if (e.faction == enFaction) {
-			cought += max(-30.0, myRefugeDistance - e.refugeDistance) / (scareFactor + myHPpct) * (e.type == 3 ? 4.0: 1.0); // !!!!!!!!! только для топ-линии! для остальных нужно свои формулы делать
+			cought += max(0.0, myRefugeDistance - e.refugeDistance) / (scareFactor + myHPpct) * (e.type == 3 ? 4.0: 1.0); // !!!!!!!!! только для топ-линии! для остальных нужно свои формулы делать
 		}
 		double angleCoef = sigmoid(fabs(e.getAngleTo(x, y)), PI / 12.0 * (1.0 + timeToCome * 0.4), 0.5);
 		//double myAngleCoef = sigmoid(fabs(e.getAngleTo(x, y)), PI / 12.0 * (1.0 + timeToCome * 0.4), 0.5);
 		//хотим бить руками
-		if(staff_cd <= timeToCome) enemiesAttackable.insert(sigmoid(dist, 70 - 38 - 5 + e.radius, staffDamageDealCoef * myHPpct)); // !!!!!!!!!!!!!!!!!! не учитываем угол для удара!
+		if(staff_cd <= timeToCome) enemiesAttackable.insert(sigmoid(dist, 70 - 38 - 5 + e.radius, staffDamageDealCoef)); // !!!!!!!!!!!!!!!!!! не учитываем угол для удара!
 
 		if (!checkCollisions(x, y, e.x, e.y, true, -25.0)) {
 			if (am_cd <= timeToCome) {
 				//мы хотим атаковать (стрелять)
-				enemiesAttackable.insert(sigmoid(predicted_dist, myAttackRange + e.radius, damageDealCoef / (1.0 - sigmoid(e.hp, 20.0, 0.5)))); // 500 - дальность моей атаки, 10 - радиус снаряда, 38 - дополнительный радиус дин. объекта
+				enemiesAttackable.insert(sigmoid(predicted_dist, myAttackRange + e.radius, damageDealCoef / (1.0 - sigmoid(e.hp, myAMdamage, 0.5) * (e.type > 2 ? 4.0 : 1.0)))); // 500 - дальность моей атаки, 10 - радиус снаряда, 38 - дополнительный радиус дин. объекта
 			}
 
 			if (angleCoef > 0.1) {
@@ -1266,8 +1293,8 @@ double getPotential(double x, double y, const World& world, const vector<dcircle
 					enemiesAggroed.insert(sigmoid(dist, tmp1, angleCoef * damageTakeFromMinionCoef / (scareFactor + myHPpct)));
 				}
 				else {
-					enemiesAggroed.insert(sigmoid(dist, tmp1, angleCoef * damageTakeFromWizardCoef / (scareFactor + myHPpct)));
-					enemiesAggroed.insert(sigmoid(dist, 105.0, angleCoef * damageTakeFromWizardCoef / (scareFactor + myHPpct)));
+					enemiesAggroed.insert(sigmoid(dist, tmp1, angleCoef * damageTakeFromWizardCoef / (scareFactor + myHPpct) * e.hpPct));
+					enemiesAggroed.insert(sigmoid(dist, 105.0, angleCoef * damageTakeFromWizardCoef / (scareFactor + myHPpct) * e.hpPct));
 				}
 			}
 		}
@@ -1280,9 +1307,11 @@ double getPotential(double x, double y, const World& world, const vector<dcircle
 	mod = 1.0;
 	for (auto& d : enemiesAggroed) {
 		negative += mod * d;
-		mod *= 2.5;
+		mod *= 2;
+		if (mod > 50.0) break;
 	}
 
+	/*
 	for (auto&p : projNear) {
 		double A = p.getSpeedY();
 		double B = -p.getSpeedX();
@@ -1293,6 +1322,7 @@ double getPotential(double x, double y, const World& world, const vector<dcircle
 			negative += sigmoid(fabs(A * x + B * y + C) / sqrt(A * A + B * B), 45, projectileCoef / (scareFactor + myHPpct));
 		}
 	}
+	*/
 
 	if(top_rune_cond > 0) { //!!!!!!!!!!!!!!!! для бот-руны тоже надо!
 		//double dist = sqrt(sqr(x - top_rune.getX()) + sqr(y - top_rune.getY()));
@@ -1301,8 +1331,17 @@ double getPotential(double x, double y, const World& world, const vector<dcircle
 		positive += max(0.0, 3000.0 - pathLenghtToBonus - dist ) * 3.0;
 	}
 
-	return positive - negative / scared_pct - obstacles - cought * catchFearCoef;
+	return positive * scared_pct - negative / scared_pct - obstacles - cought * catchFearCoef;
 }
+
+struct microNode {
+	double potential;
+	double x, y;
+	microNode* prev;
+	double dist = 0.0;
+
+	microNode(microNode* p = NULL, double _x = 0.0, double _y = 0.0, double _potential = 0.0) : prev(p), x(_x), y(_y), potential(_potential) { }
+};
 
 double pathLength(const list<point> & path, const Wizard& self) {
 	list<point>::const_iterator it, it_next, it_end;
@@ -1377,11 +1416,14 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 	maxSpeedY = maxMSY(self); // !!!!!!!!!!!!!!!!!!! НУЖНО УЧИТЫВАТЬ БАФФЫ на скорость
 
 	bool haste = false;
+	bool shield = false;
 	auto myStatuses = self.getStatuses();
 	for (auto&s : myStatuses) {
 		if (s.getType() == STATUS_HASTENED) {
 			haste = true;
-			break;
+		}
+		if (s.getType() == STATUS_SHIELDED) {
+			shield = true;
 		}
 	}
 	if (haste) {
@@ -1389,22 +1431,18 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		maxSpeedY *= 1.0 + game.getHastenedMovementBonusFactor();
 	}
 
-	myAttackRange = 500 + 10 - 60 + 25.0 * max(0.0, (double) self.getLevel() - 4.0); // -60 чтобы легче попадать
+	double myHPpct = ((double)self.getLife()) / ((double)self.getMaxLife());
+	if (shield) myHPpct *= 1.5;
+
+	myAttackRange = 500 + 10 - 20; // -20 чтобы легче попадать
 
 	auto myLane = getUnitLane(selfx, selfy);
 	if (myLane == TOP) { // !!!!!!!!!! другие лэйны тоже надо учитывать
-		if (selfy > 600) {
-			for (auto&p : refugePoints[TOP]) {
-				if (selfy > p.y) break;
-				refugePoint = p;
-			}
-		}
-		else {
-			refugePoint = refugePoints[TOP].front();
-			for (auto&p : refugePoints[TOP]) {
-				if (selfx < p.x) break;
-				refugePoint = p;
-			}
+		refugePoint = refugePoints[TOP].front();
+		for (auto&p : refugePoints[TOP]) {
+			if ((2000.0 - selfx) * (2000.0 - p.y) > (2000.0 - p.x) * (2000.0 - selfy)) break;
+			if (sqr(p.x - selfx) + sqr(p.y - selfy) < 10000.0) break;
+			refugePoint = p;
 		}
 	}
 
@@ -1425,6 +1463,19 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 	am_cd = max((double)CDs[ACTION_MAGIC_MISSILE], action_cd);
 	fsb_cd = max((double)CDs[ACTION_FROST_BOLT], action_cd);
 	frb_cd = max((double)CDs[ACTION_FIREBALL], action_cd);
+
+	myAMdamage = 12;
+	auto& skills = self.getSkills();
+	for (auto& s : skills) {
+		if ((s >= 5) && (s <= 8)) {
+			myAMdamage += 1;
+			continue;
+		}
+		if ((s >= 0) && (s <= 3)) {
+			myAttackRange += 25.0;
+			continue;
+		}
+	}
 
 	// ========================================================= Level up? ===================================================================================================================================================================
 	move.setSkillToLearn(skillBuild[self.getLevel()]);
@@ -1535,6 +1586,10 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 			inBattle = true;
 			break;
 		}
+		if (e.cd > 0) {
+			inBattle = true;
+			break;
+		}
 	}
 
 #pragma endregion
@@ -1595,96 +1650,107 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 #pragma region "Micro"
 	if (inBattle) {
 		auto ts = time();
-
-		double myHPpct = ((double)self.getLife()) / ((double)self.getMaxLife());
-		auto best = getPotential(selfx, selfy, world, enemiesNear, myHPpct, self);
+		
+		auto best = getPotential(selfx, selfy, world, enemiesNear, myHPpct, self, 0.0);
 		cout << "cur potential: " << best << endl;
 		point best_pt(selfx, selfy);
 
 		double pot_step = 40.0;
-		double search_rad = 7.0;
+		int maxPoints = 150;
+		int cur_point = 0;
 		double pot;
+		
+		typedef pair<int, int> pt;
+		map<pt, microNode> visited;
+		vector<pt> cur, next;
+		cur.reserve(maxPoints);
+		next.reserve(maxPoints);
+		microNode* best_node;
 
-#ifdef _zuko3d_pc
-		vector<double> pre_bmp;
-		int wd = 2 * ((int)search_rad) + 1;
-		TGAImage bmp(wd,wd);
-		pre_bmp.resize(sqr(wd));
-#endif
+		cur.push_back(pt(0,0));
+		visited[pt(0, 0)] = microNode(NULL, selfx, selfy, best);
+		best_node = &visited[pt(0, 0)];
 
-		double xstart = selfx - pot_step * search_rad;
-		double ystart = selfy - pot_step * search_rad;
-		for (double y(ystart), y_end(selfy + pot_step * search_rad); y <= y_end; y += pot_step) {
-			for (double x(xstart), x_end(selfx + pot_step * search_rad); x <= x_end; x += pot_step) {
-#ifdef _zuko3d_pc
-				
-				int xi = (int)floor(0.5 + (x - xstart) / pot_step);
-				int yi = (int)floor(0.5 + (y - ystart) / pot_step);
-#endif
- 				pot = getPotential(x, y, world, enemiesNear, myHPpct, self);
-#ifdef _zuko3d_pc
-				//cout << "\t" << floor(pot * 10.0);
-				pre_bmp[xi + yi * wd] = pot;		
-#endif
-				if (pot > best) {
-					best = pot;
-					best_pt = point(x, y);
+		while ((!cur.empty()) && (cur_point < maxPoints)) {
+			for (auto& p : cur) {
+				auto& cur_node = visited[p];
+
+				for (int i = -1; i < 2; i++) {
+					for (int j = -1; j < 2; j++) {
+						if ((i == 0) && (j==0)) continue;
+						
+						pt neib = pt(p.first + i, p.second + j);
+						double tdist = cur_node.dist + pot_step * fast_sqrt[i*i + j*j];
+						microNode tnode;
+						double px = selfx + pot_step * ((double)neib.first);
+						double py = selfy + pot_step * ((double)neib.second);
+
+						if (!checkCollisionsShort(px, py, cur_node.x, cur_node.y)) {
+							if (visited.find(neib) == visited.end()) {
+								tnode.x = px;
+								tnode.y = py;
+								tnode.dist = tdist;
+								tnode.potential = getPotential(tnode.x, tnode.y, world, enemiesNear, myHPpct, self, tnode.dist);
+								tnode.prev = &cur_node; //!!!!!!!!! проверить, что указатель даётся на обхект из мэпа
+								
+								visited[neib] = tnode;
+
+								if (tnode.potential > best) {
+									best = tnode.potential;
+									best_node = &visited[neib];
+								}
+								next.push_back(neib);
+							}
+							else {
+								auto& vnode = visited[neib];
+
+								if (vnode.dist > tdist) {
+									vnode.dist = tdist;
+									vnode.prev = &cur_node;
+								}
+							}
+						}
+					}
 				}
 			}
-			//cout << endl;
+
+			cur_point += cur.size();
+			cur.swap(next);
+			next.resize(0);
 		}
-		cout << "best: " << best << " \t coord: " << floor(best_pt.x) << " \t" << floor(best_pt.y) << endl;
-		
-		curWay = findPathToZone(point(selfx, selfy), best_pt, pot_step, 10.0, 3000);
+		curWay.clear();
+		while (best_node != NULL) {
+			curWay.push_front(point(best_node->x, best_node->y));
+			best_node = best_node->prev;
+		}
+		smoothenPath(curWay);
+
 		if (!curWay.empty()) {
 			setMoveToPoint(self, move, curWay.front());
 			destination = curWay.front();
 		}
-		else {
-			setMoveToPoint(self, move, best_pt);
-			destination = best_pt;
-		}
 
 		cout << "pot. calc time: " << time() - ts << endl;
 #ifdef _zuko3d_pc
-		//saturate
-		double mx = 0;
-		for (auto&p : pre_bmp) {
-			if (mx < fabs(p)) mx = fabs(p);
+		double maxpot = 0.0;
+		for (auto&p : visited) {
+			if (fabs(p.second.potential) > maxpot) maxpot = fabs(p.second.potential);
 		}
-		mx = 254 / log(mx + 1.0);
-		Colour clr;
-		clr.a = 255;
-		clr.r = 0;
-		clr.g = 0;
-		clr.b = 0;
-		
-		for(unsigned int i = 0; i < pre_bmp.size(); i++){
-			if (pre_bmp[i] < 0) {
-				//bmp[i * 3] = (BYTE)floor(-pre_bmp[i] * mx);
-				clr.r = (unsigned char) floor(log(-pre_bmp[i] + 1.0) * mx);
-				clr.g = 0;
-				bmp.setPixel(clr, i % wd, i / wd);
-				deb.fillCircle(xstart + pot_step *((double) (i % wd)), ystart + pot_step *((double)(i / wd)), 10, clr.r << 16);
+
+		maxpot = 254.0 / log(maxpot + 1.0);
+		for (auto&p : visited) {
+			if (p.second.potential > 0) {
+				int clr = floor(log(p.second.potential + 1.0) * maxpot);
+				deb.fillCircle(p.second.x, p.second.y, 12.0, clr << 8);
 			}
 			else {
-				clr.g = (unsigned char)floor(log(pre_bmp[i] + 1.0) * mx);
-				clr.r = 0;
-				bmp.setPixel(clr, i % wd, i / wd);
-				deb.fillCircle(xstart + pot_step *((double)(i % wd)), ystart + pot_step *((double)(i / wd)), 10, clr.g << 8);
+				int clr = floor(log(-p.second.potential + 1.0) * maxpot);
+				deb.fillCircle(p.second.x, p.second.y, 12.0, clr << 16);
 			}
 		}
-		int xi = (int)((best_pt.x - xstart) / pot_step);
-		int yi = (int)((best_pt.y - ystart) / pot_step);
 
-		cout << "xi/yi: " << xi << " \t" << yi << endl;
-
-		clr.r = 255;
-		clr.g = 255;
-		clr.b = 255;
-		bmp.setPixel(clr, xi, yi);
-
-		bmp.WriteImage("potential.tga");
+		string txt = "tick: " + toString(world.getTickIndex());
+		deb.text(0, 0, &txt[0], 0);
 		deb.endPost();
 
 		system("pause");
@@ -1710,8 +1776,9 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 								if (!checkCollisions(selfx, selfy, pt.x, pt.y, true, -25.0)) {
 									double pts = 1000.0 / w.hp;
 									if (w.type == 3) pts += 10.0;
-									if (w.type == 4) pts += 15.0;
-									if (w.type == 5) pts += 20.0;
+									if (w.type == 4) pts += 150.0;
+									if (w.type == 5) pts += 200.0;
+									if (w.hp < myAMdamage) pts += 300;
 									if (pts > best) {
 										aim = pt;
 										best = pts;
@@ -1748,13 +1815,14 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 			for (auto&w : enemiesNear) {
 				point pt(w.predicted_x, w.predicted_y);
 				double dist = self.getDistanceTo(pt);
-				if (dist < 540) {
+				if (dist < myAttackRange + w.radius) {
 					if (!checkCollisions(selfx, selfy, pt.x, pt.y, true, -25.0)) {
 						double pts = (5.0 + max(0.0, self.getAngleTo(pt) / PI * 30.0 - am_cd)) / w.hp;
 						if (dist < 30 + w.radius) pts *= 1.5 + max(0.0, am_cd - staff_cd) / 3.0; // we can strike it with STAFF!
 						if (w.type == 3) pts += 10.0;
-						if (w.type == 4) pts += 15.0;
-						if (w.type == 5) pts += 20.0;
+						if (w.type == 4) pts += 150.0;
+						if (w.type == 5) pts += 200.0;
+						if (w.hp < myAMdamage) pts += 300;
 						if (pts > best) {
 							aim = pt;
 							best = pts;
@@ -1810,6 +1878,10 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 					needToRecountPath = true;
 					cout << "New tree spawned!" << endl;
 				}
+				if (world.getTickIndex() - path_generated > 50) {
+					needToRecountPath = true;
+					cout << "too old path!" << endl;
+				}
 			}
 			else {
 				needToRecountPath = true;
@@ -1819,9 +1891,11 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 				static long long cumulative = 0;
 				if (cur_aim == PUSH) {
 					curWay = findPathToZone(point(self.getX(), self.getY()), destination, 300.0);
+					path_generated = world.getTickIndex();
 				}
 				else {
 					curWay = findPath(point(self.getX(), self.getY()), destination);
+					path_generated = world.getTickIndex();
 				}
 				cumulative += time() - ts;
 				//cout << "time spent for path: " << (time() - ts) / 1000000 << " \t " << cumulative / 1000000 << endl;
@@ -1842,10 +1916,48 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 
 	cum_move_time += time() - move_start_time;
 	prev_tick = world.getTickIndex();
+#ifdef _zuko3d_pc
+	/*
+	for (auto&t : staticObjects) {
+		deb.fillCircle(t.x, t.y, t.radius, 128 << 8);
+	}
+
+	int tmpi = floor(selfx / cellSize);
+	int tmpj = floor(selfy / cellSize);
+	for (int i = tmpi - 5; i < tmpi + 5; i++) {
+		if (i < 0) continue;
+		for (int j = tmpj - 5; j < tmpj + 5; j++) {
+			if (j < 0) continue;
+			deb.rect(i * cellSize, j * cellSize, (i + 1) * cellSize, (j + 1) * cellSize, 255 << 16);
+			string txt = toString(staticMap[i][j].size());
+			deb.text(i * cellSize + 20, j * cellSize + 20, &txt[0], 255);
+		}
+	}	
+	*/
+	deb.endPost();
+	//deb.beginPost();
+	//deb.endPost();
+	deb.beginAbs();
+	string txt = "tick: " + toString(world.getTickIndex());
+	deb.text(10, 10, &txt[0], 0);
+	txt = "AM cd: " + toString(am_cd);
+	deb.text(10, 200, &txt[0], 0);
+	txt = "FSB cd: " + toString(fsb_cd);
+	deb.text(10, 220, &txt[0], 0);
+	deb.endAbs();
+	deb.beginAbs();
+	deb.endAbs();
+	//system("pause");
+#endif // _zuko3d_pc
 	//cout << prev_tick << ":\t Time per tick(us): " << cum_move_time / tick / 1000 << endl;
 }
 
 MyStrategy::MyStrategy() { 
+#ifndef _zuko3d_pc
+	ofstream file_null("/dev/null");
+	cout.rdbuf(file_null.rdbuf());
+#endif // !_zuko3d_pc
+
 	staticMap.resize(5 + (int)ceil(4000.0 / cellSize));
 	for (auto &row : staticMap) {
 		row.resize(5 + (int)ceil(4000.0 / cellSize));
