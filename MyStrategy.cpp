@@ -161,6 +161,7 @@ double staff_cd;
 double am_cd;
 double fsb_cd;
 double frb_cd;
+double selfx, selfy;
 
 int path_generated = -1000;
 
@@ -219,7 +220,7 @@ namespace std {
 	};
 }
 struct std::circle {
-	double radius = 0.0;
+	double radius = 0.0; //radius with additional radius!
 	double x = 0.0, y = 0.0;
 	long long id;
 	bool isTree = false;
@@ -243,6 +244,9 @@ struct std::circle {
 	double distanceTo(const point& p) const {
 		return distanceTo(p.x, p.y);
 	}
+	double distanceTo(const CircularUnit& p) const {
+		return distanceTo(p.getX(), p.getY());
+	}
 };
 
 list<point> pathToBonus;
@@ -260,10 +264,13 @@ struct std::dcircle : circle {
 	double refugeDistance = 0.0;
 	double predicted_x, predicted_y;
 	double attack_priority;
+	double aimed_radius;
 
 	dcircle() { }
 
-	dcircle(const LivingUnit& u, double additionalRadius = 38) : circle(u, additionalRadius), predicted_x(u.getX() + 3.0 * u.getSpeedX()), predicted_y(u.getY() + 3.0 * u.getSpeedY()), hpPct((double) u.getLife() / (double) u.getMaxLife()), hp((double) u.getLife()), angle(u.getAngle()), faction(u.getFaction()) { }
+	dcircle(const LivingUnit& u, double additionalRadius = 38) : circle(u, additionalRadius), predicted_x(u.getX() + 3.0 * u.getSpeedX()), predicted_y(u.getY() + 3.0 * u.getSpeedY()), hpPct((double) u.getLife() / (double) u.getMaxLife()), hp((double) u.getLife()), angle(u.getAngle()), faction(u.getFaction()) {
+		aimed_radius = u.getRadius();
+	}
 
 	dcircle(const Minion& u, double additionalRadius = 38) : dcircle((LivingUnit) u, additionalRadius) {
 		sightRange = u.getVisionRange();
@@ -274,12 +281,19 @@ struct std::dcircle : circle {
 			type = 1;
 			attackRange = 305 + 35;
 		}
+
+		attack_priority = (hp < myAMdamage) ? 25.0 : myAMdamage / 8.0;
 	}
 	dcircle(const Wizard& u, double additionalRadius = 38) : dcircle((LivingUnit)u, additionalRadius) {
 		sightRange = u.getVisionRange();
 		type = 3;
 		attackRange = 510 + 35; // !!!!!!!!!!!!!!!!!!!!!! дальность атаки увеличивается с уровнем!
-		cd = u.getRemainingCooldownTicksByAction()[ACTION_MAGIC_MISSILE];
+		double abs_speed = max(3.5, sqrt(sqr(u.getSpeedX()) + sqr(u.getSpeedY())));
+
+		aimed_radius = 35 + 5 - (distanceTo(selfx, selfy) - 35) / 35.0 * abs_speed;
+		cd = u.getRemainingActionCooldownTicks();
+
+		attack_priority = (hp < 24) ? u.getMaxLife() : myAMdamage / 4.0;
 	}
 	dcircle(const Building& u, double additionalRadius = 38) : dcircle((LivingUnit)u, additionalRadius) {
 		sightRange = u.getVisionRange();
@@ -290,6 +304,8 @@ struct std::dcircle : circle {
 			type = 5;
 			attackRange = 800;
 		}
+
+		attack_priority = (hp < 24) ? u.getMaxLife() / 2.0: myAMdamage / 2.0;
 	}
 
 	bool operator<(const dcircle& c) const {
@@ -310,6 +326,18 @@ struct std::dcircle : circle {
 		
 		double ret = atan2(dx, dy) - angle;
 		if (ret > PI) ret -= 2.0 * PI;
+		if (ret < -PI) ret += 2.0 * PI;
+
+		return ret;
+	}
+
+	double getAngleFrom(const CircularUnit& u) const {
+		double dx = x - u.getX();
+		double dy = y - u.getY();
+
+		double ret = atan2(dx, dy) - u.getAngle();
+		if (ret > PI) ret -= 2.0 * PI;
+		if (ret < -PI) ret += 2.0 * PI;
 
 		return ret;
 	}
@@ -1283,7 +1311,7 @@ double getPotential(double x, double y, const World& world, const vector<dcircle
 		if (!checkCollisions(x, y, e.x, e.y, true, -25.0)) {
 			if (am_cd <= timeToCome) {
 				//мы хотим атаковать (стрелять)
-				enemiesAttackable.insert(sigmoid(predicted_dist, myAttackRange + e.radius, damageDealCoef / (1.0 - sigmoid(e.hp, myAMdamage, 0.5) * (e.type > 2 ? 4.0 : 1.0)))); // 500 - дальность моей атаки, 10 - радиус снаряда, 38 - дополнительный радиус дин. объекта
+				enemiesAttackable.insert(sigmoid(predicted_dist, myAttackRange + e.aimed_radius, damageDealCoef / (1.0 - sigmoid(e.hp, myAMdamage, 0.5) * (e.type > 2 ? 4.0 : 1.0)))); // 500 - дальность моей атаки, 10 - радиус снаряда, 38 - дополнительный радиус дин. объекта
 			}
 
 			if (angleCoef > 0.1) {
@@ -1328,7 +1356,7 @@ double getPotential(double x, double y, const World& world, const vector<dcircle
 		//double dist = sqrt(sqr(x - top_rune.getX()) + sqr(y - top_rune.getY()));
 		//double dist = fabs(x - top_rune.getX()) + fabs(y - top_rune.getY());
 		double dist = sqrt(sqr(pathToBonus.front().x - x) + sqr(pathToBonus.front().y - y));
-		positive += max(0.0, 3000.0 - pathLenghtToBonus - dist ) * 3.0;
+		positive += max(0.0, 2000.0 - pathLenghtToBonus - dist );
 	}
 
 	return positive * scared_pct - negative / scared_pct - obstacles - cought * catchFearCoef;
@@ -1400,8 +1428,8 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 	// ======================================================== Update Variables===================================================================================================================================================================
 	
 	bool newTrees = false;
-	double selfx = self.getX();
-	double selfy = self.getY();
+	selfx = self.getX();
+	selfy = self.getY();
 
 	tick++;
 	myFaction = self.getFaction();
@@ -1461,8 +1489,8 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 	auto& CDs = self.getRemainingCooldownTicksByAction();
 	staff_cd = max((double)CDs[ACTION_STAFF], action_cd);
 	am_cd = max((double)CDs[ACTION_MAGIC_MISSILE], action_cd);
-	fsb_cd = max((double)CDs[ACTION_FROST_BOLT], action_cd);
-	frb_cd = max((double)CDs[ACTION_FIREBALL], action_cd);
+	fsb_cd = 1000;
+	frb_cd = 1000;
 
 	myAMdamage = 12;
 	auto& skills = self.getSkills();
@@ -1475,7 +1503,15 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 			myAttackRange += 25.0;
 			continue;
 		}
+		if (s == SKILL_FROST_BOLT) {
+			fsb_cd = max((double)CDs[ACTION_FROST_BOLT], action_cd);
+		}
+		if (s == SKILL_FIREBALL) {
+			frb_cd = max((double)CDs[ACTION_FIREBALL], action_cd);
+		}
 	}
+
+	double range_spell_cd = min(am_cd, min(fsb_cd, frb_cd));
 
 	// ========================================================= Level up? ===================================================================================================================================================================
 	move.setSkillToLearn(skillBuild[self.getLevel()]);
@@ -1753,7 +1789,7 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		deb.text(0, 0, &txt[0], 0);
 		deb.endPost();
 
-		system("pause");
+		//system("pause");
 #endif
 	}
 #pragma endregion
@@ -1765,48 +1801,55 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 		deb.circle(selfx, selfy, 600, 255);
 #endif
 		if (inBattle) {
-			if (!self.getRemainingActionCooldownTicks()) {
-				if (self.getRemainingCooldownTicksByAction()[ACTION_MAGIC_MISSILE] < 1) {
-					point aim(0, 0);
-					double best = 0.0;
-					for (auto&w : enemiesNear) {
-						point pt(w.predicted_x, w.predicted_y);
+			if (action_cd == 0) {
+				auto spell = ACTION_MAGIC_MISSILE;
+				if (range_spell_cd == 0) {
+					if (fsb_cd == 0) {
+						if (self.getMana() >= 36) {
+							spell = ACTION_FROST_BOLT;
+						}
+					}
+					if (frb_cd == 0) {
+						if (self.getMana() >= 48) {
+							spell = ACTION_FIREBALL;
+						}
+					}
+				}
+				pair <model::ActionType, dcircle *> best_action;
+				double best_pts = 0.0;
+				for (auto&w : enemiesNear) {
+					point pt(w.predicted_x, w.predicted_y);
+					if (range_spell_cd == 0) {
 						if (fabs(self.getAngleTo(pt)) < PI / 12.0) {
-							if (self.getDistanceTo(pt) < myAttackRange + w.radius) { // 38 - доп. радиус, -12 чтобы было тяжелее увернуться
+							if (self.getDistanceTo(pt) < myAttackRange + w.aimed_radius) { // 38 - доп. радиус, -12 чтобы было тяжелее увернуться
 								if (!checkCollisions(selfx, selfy, pt.x, pt.y, true, -25.0)) {
-									double pts = 1000.0 / w.hp;
-									if (w.type == 3) pts += 10.0;
-									if (w.type == 4) pts += 150.0;
-									if (w.type == 5) pts += 200.0;
-									if (w.hp < myAMdamage) pts += 300;
-									if (pts > best) {
-										aim = pt;
-										best = pts;
+									if (w.attack_priority > best_pts) {
+										best_pts = w.attack_priority;
+										best_action.first = spell;
+										best_action.second = &w;
 									}
 								}
 							}
 						}
 					}
-
-					if (best > 0.0) {
-						move.setAction(ACTION_MAGIC_MISSILE);
-						move.setCastAngle(self.getAngleTo(aim));
-						move.setMinCastDistance(self.getDistanceTo(aim) - 8 - 30);
-						move.setMaxCastDistance(650);
-					}
-				}
-				else {
-					if (self.getRemainingCooldownTicksByAction()[ACTION_STAFF] < 1) {
-						for (auto&e : enemiesNear) {
-							if (e.distanceTo((point)self) < 30 + e.radius) {
-								point pt(e);
-								if (fabs(self.getAngleTo(pt)) <= PI / 12.0) {
-									move.setAction(ACTION_STAFF);
-									break;
+					if (staff_cd == 0) {
+						if (w.distanceTo(selfx, selfy) < 70 - 38 + w.radius) {
+							if (fabs(self.getAngleTo(pt)) < PI / 12.0) {
+								if (w.attack_priority > best_pts) {
+									best_pts = w.attack_priority;
+									best_action.first = spell;
+									best_action.second = &w;
 								}
 							}
 						}
 					}
+				}
+
+				if (best_pts > 0.0) {
+					move.setAction(best_action.first);
+					move.setCastAngle(self.getAngleTo((point)*best_action.second));
+					move.setMinCastDistance(best_action.second->distanceTo(self) - 10 - best_action.second->radius + 38);
+					move.setMaxCastDistance(650);
 				}
 			}
 			
@@ -1815,14 +1858,10 @@ void MyStrategy::move(const Wizard& self, const World& world, const Game& game, 
 			for (auto&w : enemiesNear) {
 				point pt(w.predicted_x, w.predicted_y);
 				double dist = self.getDistanceTo(pt);
-				if (dist < myAttackRange + w.radius) {
+				if (dist < myAttackRange + w.aimed_radius) {
 					if (!checkCollisions(selfx, selfy, pt.x, pt.y, true, -25.0)) {
-						double pts = (5.0 + max(0.0, self.getAngleTo(pt) / PI * 30.0 - am_cd)) / w.hp;
-						if (dist < 30 + w.radius) pts *= 1.5 + max(0.0, am_cd - staff_cd) / 3.0; // we can strike it with STAFF!
-						if (w.type == 3) pts += 10.0;
-						if (w.type == 4) pts += 150.0;
-						if (w.type == 5) pts += 200.0;
-						if (w.hp < myAMdamage) pts += 300;
+						double pts = w.attack_priority * sigmoid(max(0.0, self.getAngleTo(pt) / PI * 30.0 - action_cd), 1, 0.5);
+
 						if (pts > best) {
 							aim = pt;
 							best = pts;
@@ -1991,11 +2030,11 @@ MyStrategy::MyStrategy() {
 	skillBuild.push_back(SKILL_MAGICAL_DAMAGE_BONUS_AURA_1);
 	skillBuild.push_back(SKILL_MAGICAL_DAMAGE_BONUS_PASSIVE_2);
 	skillBuild.push_back(SKILL_MAGICAL_DAMAGE_BONUS_AURA_2);
+	skillBuild.push_back(SKILL_FROST_BOLT);
 	skillBuild.push_back(SKILL_RANGE_BONUS_PASSIVE_1);
 	skillBuild.push_back(SKILL_RANGE_BONUS_AURA_1);
 	skillBuild.push_back(SKILL_RANGE_BONUS_PASSIVE_2);
 	skillBuild.push_back(SKILL_RANGE_BONUS_AURA_2);
-	skillBuild.push_back(SKILL_ADVANCED_MAGIC_MISSILE);
 	skillBuild.push_back(SKILL_STAFF_DAMAGE_BONUS_PASSIVE_1);
 	skillBuild.push_back(SKILL_STAFF_DAMAGE_BONUS_AURA_1);
 	skillBuild.push_back(SKILL_STAFF_DAMAGE_BONUS_PASSIVE_2);
